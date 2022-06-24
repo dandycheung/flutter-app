@@ -63,7 +63,7 @@ packages:
       name: bitsdojo_window
       url: "https://pub.dartlang.org"
     source: hosted
-    version: "0.1.1+1"
+    version: "0.1.2"
   bitsdojo_window_linux:
     dependency: "direct overridden"
     description:
@@ -79,14 +79,14 @@ packages:
       name: bitsdojo_window_macos
       url: "https://pub.dartlang.org"
     source: hosted
-    version: "0.1.0"
+    version: "0.1.2"
   bitsdojo_window_platform_interface:
     dependency: transitive
     description:
       name: bitsdojo_window_platform_interface
       url: "https://pub.dartlang.org"
     source: hosted
-    version: "0.1.0"
+    version: "0.1.2"
   bitsdojo_window_windows:
     dependency: "direct overridden"
     description:
