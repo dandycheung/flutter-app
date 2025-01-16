@@ -1,19 +1,26 @@
 import 'package:equatable/equatable.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:flutter_svg/svg.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:mixin_bot_sdk_dart/mixin_bot_sdk_dart.dart' as sdk;
+import 'package:mixin_logger/mixin_logger.dart';
 import 'package:sliver_tools/sliver_tools.dart';
 
 import '../../bloc/simple_cubit.dart';
 import '../../constants/brightness_theme_data.dart';
+import '../../constants/constants.dart';
 import '../../constants/resources.dart';
 import '../../crypto/uuid/uuid.dart';
+import '../../db/dao/conversation_dao.dart';
 import '../../db/mixin_database.dart';
 import '../../enum/encrypt_category.dart';
 import '../../utils/extension/extension.dart';
 import '../../utils/hook.dart';
 import '../action_button.dart';
 import '../avatar_view/avatar_view.dart';
+import '../conversation/badges_widget.dart';
 import '../dialog.dart';
 import '../high_light_text.dart';
 import '../interactive_decorated_box.dart';
@@ -92,10 +99,12 @@ Future<List<ConversationSelector>?> showConversationSelector({
   required bool singleSelect,
   required String title,
   required bool onlyContact,
+  Iterable<String> filteredIds = const [],
   bool allowEmpty = false,
   List<ConversationSelector> initSelected = const [],
   String? confirmedText,
   Widget? action,
+  int? maxSelect,
 }) =>
     showMixinDialog<List<ConversationSelector>?>(
       context: context,
@@ -104,9 +113,11 @@ Future<List<ConversationSelector>?> showConversationSelector({
         singleSelect: singleSelect,
         onlyContact: onlyContact,
         initSelected: initSelected,
+        filteredIds: filteredIds,
         allowEmpty: allowEmpty,
         confirmedText: confirmedText,
         action: action,
+        maxSelect: maxSelect,
       ),
     );
 
@@ -137,44 +148,58 @@ class ConversationSelector with EquatableMixin {
       );
 }
 
-class _ConversationSelector extends HookWidget {
+class _ConversationSelector extends HookConsumerWidget {
   const _ConversationSelector({
     required this.singleSelect,
     required this.title,
     required this.onlyContact,
     this.initSelected = const [],
+    this.filteredIds = const [],
     this.allowEmpty = false,
     this.confirmedText,
     this.action,
+    this.maxSelect,
   });
 
   final String title;
   final bool singleSelect;
   final bool onlyContact;
   final List<ConversationSelector> initSelected;
+  final Iterable<String> filteredIds;
   final bool allowEmpty;
   final String? confirmedText;
   final Widget? action;
+  final int? maxSelect;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final selector = useBloc(() => SimpleCubit<List<dynamic>>(const []));
     void selectItem(dynamic item) {
       final list = [...selector.state];
       if (list.contains(item)) {
         list.remove(item);
       } else {
+        if (maxSelect != null && list.length >= maxSelect!) {
+          w('max select reached: $maxSelect');
+          return;
+        }
         list.add(item);
       }
       selector.emit(list);
     }
 
-    final conversationFilterCubit = useBloc(() => ConversationFilterCubit(
-            useContext().accountServer, onlyContact, (state) {
+    final conversationFilterCubit = useBloc(
+      () => ConversationFilterCubit(
+        useContext().accountServer,
+        onlyContact,
+        filteredIds,
+        (state) {
           state.recentConversations.forEach((element) {
             if (!initSelected
                 .map((e) => e.conversationId)
-                .contains(element.conversationId)) return;
+                .contains(element.conversationId)) {
+              return;
+            }
             selectItem(element);
           });
 
@@ -187,7 +212,11 @@ class _ConversationSelector extends HookWidget {
             if (!userIds.contains(element.userId)) return;
             selectItem(element);
           });
-        }));
+        },
+      ),
+      keys: [useContext().accountServer, onlyContact, filteredIds],
+    );
+
     final conversationFilterState =
         useBlocState<ConversationFilterCubit, ConversationFilterState>(
       bloc: conversationFilterCubit,
@@ -198,7 +227,7 @@ class _ConversationSelector extends HookWidget {
         final list = await context.database.appDao
             .appInIds(conversationFilterState.appIds)
             .get();
-        return {for (var e in list) e.appId: e};
+        return {for (final e in list) e.appId: e};
       },
       <String, App>{},
       keys: [conversationFilterState],
@@ -258,7 +287,7 @@ class _ConversationSelector extends HookWidget {
                           ),
                           if (!singleSelect)
                             Text(
-                              '${selected.length} / ${conversationFilterState.recentConversations.length + conversationFilterState.friends.length + conversationFilterState.bots.length}',
+                              '${selected.length} / ${maxSelect ?? conversationFilterState.recentConversations.length + conversationFilterState.friends.length + conversationFilterState.bots.length}',
                               style: TextStyle(
                                 fontSize: 12,
                                 color: context.theme.secondaryText,
@@ -298,46 +327,7 @@ class _ConversationSelector extends HookWidget {
                 ],
               ),
             ),
-            Container(
-              height: 32,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              margin: const EdgeInsets.only(top: 8, right: 24, left: 24),
-              decoration: BoxDecoration(
-                color: context.theme.background,
-                borderRadius: const BorderRadius.all(Radius.circular(16)),
-              ),
-              alignment: Alignment.center,
-              child: TextField(
-                onChanged: (string) => conversationFilterCubit.keyword = string,
-                style: TextStyle(
-                  color: context.theme.text,
-                  fontSize: 14,
-                ),
-                autofocus: true,
-                scrollPadding: EdgeInsets.zero,
-                decoration: InputDecoration(
-                  prefixIcon: Padding(
-                    padding: const EdgeInsetsDirectional.only(end: 8),
-                    child: SvgPicture.asset(
-                      Resources.assetsImagesIcSearchSmallSvg,
-                      colorFilter: ColorFilter.mode(
-                        context.theme.secondaryText,
-                        BlendMode.srcIn,
-                      ),
-                    ),
-                  ),
-                  prefixIconConstraints: const BoxConstraints(
-                    minHeight: 16,
-                    minWidth: 16,
-                  ),
-                  isDense: true,
-                  hintText: context.l10n.search,
-                  hintStyle: TextStyle(color: context.theme.secondaryText),
-                  focusedBorder: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                ),
-              ),
-            ),
+            _FilterTextField(conversationFilterCubit: conversationFilterCubit),
             AnimatedSize(
               alignment: Alignment.topCenter,
               duration: const Duration(milliseconds: 200),
@@ -403,6 +393,9 @@ class _ConversationSelector extends HookWidget {
                               keyword: conversationFilterState.keyword,
                               avatar: item.avatarWidget,
                               title: item.validName,
+                              verified: item.ownerVerified,
+                              isBot: item.isBotConversation,
+                              membership: item.membership,
                               selected: selected.any((element) =>
                                   _getConversationId(element, context) ==
                                   _getConversationId(item, context)),
@@ -425,6 +418,9 @@ class _ConversationSelector extends HookWidget {
                               keyword: conversationFilterState.keyword,
                               avatar: item.avatarWidget,
                               title: item.fullName ?? '',
+                              verified: item.isVerified,
+                              isBot: item.appId != null,
+                              membership: item.membership,
                               showSelector: !singleSelect,
                               selected: selected.any((element) =>
                                   _getConversationId(element, context) ==
@@ -447,6 +443,9 @@ class _ConversationSelector extends HookWidget {
                               keyword: conversationFilterState.keyword,
                               avatar: item.avatarWidget,
                               title: item.fullName!,
+                              verified: item.isVerified,
+                              isBot: item.appId != null,
+                              membership: item.membership,
                               showSelector: !singleSelect,
                               selected: selected.any((element) =>
                                   _getConversationId(element, context) ==
@@ -461,6 +460,88 @@ class _ConversationSelector extends HookWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _FilterTextField extends HookConsumerWidget {
+  const _FilterTextField({
+    required this.conversationFilterCubit,
+  });
+
+  final ConversationFilterCubit conversationFilterCubit;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final isTextEmpty = useMemoizedStream(
+          () => conversationFilterCubit.stream
+              .map((event) => event.keyword?.isEmpty ?? true)
+              .distinct(),
+          keys: [conversationFilterCubit],
+        ).data ??
+        conversationFilterCubit.state.keyword?.isEmpty ??
+        true;
+    return Container(
+      height: 32,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      margin: const EdgeInsets.only(top: 8, right: 24, left: 24),
+      decoration: BoxDecoration(
+        color: context.theme.background,
+        borderRadius: const BorderRadius.all(Radius.circular(16)),
+      ),
+      alignment: Alignment.center,
+      child: Stack(
+        children: [
+          TextField(
+            onChanged: (string) => conversationFilterCubit.keyword = string,
+            style: TextStyle(
+              color: context.theme.text,
+              fontSize: 14,
+            ),
+            inputFormatters: [
+              LengthLimitingTextInputFormatter(kDefaultTextInputLimit),
+            ],
+            autofocus: true,
+            scrollPadding: EdgeInsets.zero,
+            decoration: InputDecoration(
+              prefixIcon: Padding(
+                padding: const EdgeInsetsDirectional.only(end: 8),
+                child: SvgPicture.asset(
+                  Resources.assetsImagesIcSearchSmallSvg,
+                  colorFilter: ColorFilter.mode(
+                    context.theme.secondaryText,
+                    BlendMode.srcIn,
+                  ),
+                ),
+              ),
+              prefixIconConstraints: const BoxConstraints(
+                minHeight: 16,
+                minWidth: 16,
+              ),
+              isDense: true,
+              focusedBorder: InputBorder.none,
+              enabledBorder: InputBorder.none,
+            ),
+            contextMenuBuilder: (context, state) =>
+                MixinAdaptiveSelectionToolbar(editableTextState: state),
+          ),
+          if (isTextEmpty)
+            IgnorePointer(
+              child: Padding(
+                padding: const EdgeInsets.only(left: 24, top: 7),
+                child: Text(
+                  context.l10n.search,
+                  style: TextStyle(
+                    color: context.theme.secondaryText,
+                    height: 1,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -501,7 +582,7 @@ class _AvatarSmallCloseIcon extends StatelessWidget {
                   child: SvgPicture.asset(
                     Resources.assetsImagesSmallCloseSvg,
                     colorFilter: ColorFilter.mode(
-                      Colors.white.withOpacity(0.9),
+                      Colors.white.withValues(alpha: 0.9),
                       BlendMode.srcIn,
                     ),
                   ),
@@ -559,6 +640,9 @@ class _BaseItem extends StatelessWidget {
     required this.keyword,
     required this.title,
     required this.avatar,
+    required this.verified,
+    required this.isBot,
+    required this.membership,
     this.showSelector = false,
     this.selected = false,
   });
@@ -568,6 +652,10 @@ class _BaseItem extends StatelessWidget {
   final String? keyword;
   final bool showSelector;
   final bool selected;
+
+  final bool? verified;
+  final bool isBot;
+  final sdk.Membership? membership;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -596,21 +684,35 @@ class _BaseItem extends StatelessWidget {
             avatar,
             const SizedBox(width: 16),
             Expanded(
-              child: HighlightText(
-                title.overflow,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                highlightTextSpans: [
-                  if (keyword != null)
-                    HighlightTextSpan(
-                      keyword!.overflow,
-                      style: TextStyle(color: context.theme.accent),
-                    )
+              child: Row(
+                children: [
+                  Flexible(
+                    child: CustomText(
+                      title.overflow,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textMatchers: [
+                        EmojiTextMatcher(),
+                        if (keyword != null)
+                          KeyWordTextMatcher(
+                            keyword!.overflow,
+                            style: TextStyle(
+                              color: context.theme.accent,
+                            ),
+                          ),
+                      ],
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: context.theme.text,
+                      ),
+                    ),
+                  ),
+                  BadgesWidget(
+                    verified: verified,
+                    isBot: isBot,
+                    membership: membership,
+                  ),
                 ],
-                style: TextStyle(
-                  fontSize: 16,
-                  color: context.theme.text,
-                ),
               ),
             ),
           ],

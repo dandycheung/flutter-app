@@ -3,9 +3,10 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:mixin_bot_sdk_dart/mixin_bot_sdk_dart.dart';
 
-import '../../../db/mixin_database.dart' hide Offset, Message;
+import '../../../db/mixin_database.dart' hide Message, Offset;
 import '../../../enum/media_status.dart';
 import '../../../utils/audio_message_player/audio_message_service.dart';
 import '../../../utils/extension/extension.dart';
@@ -18,11 +19,11 @@ import '../message_datetime_and_status.dart';
 import '../message_style.dart';
 import 'transcript_message.dart';
 
-class AudioMessage extends HookWidget {
+class AudioMessage extends HookConsumerWidget {
   const AudioMessage({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final isTranscriptPage = useIsTranscriptPage();
     final messageId =
         useMessageConverter(converter: (state) => state.messageId);
@@ -68,7 +69,6 @@ class AudioMessage extends HookWidget {
                 return;
               }
               context.audioMessageService.playAudioMessage(message);
-              break;
             case MediaStatus.canceled:
               if (isMessageSentOut && message.mediaUrl?.isNotEmpty == true) {
                 if (isTranscriptPage) {
@@ -82,11 +82,9 @@ class AudioMessage extends HookWidget {
               } else {
                 context.accountServer.downloadAttachment(message.messageId);
               }
-              break;
             case MediaStatus.pending:
               context.accountServer
                   .cancelProgressAttachmentJob(message.messageId);
-              break;
             case MediaStatus.expired:
             case null:
               break;
@@ -121,8 +119,9 @@ class AudioMessage extends HookWidget {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _AnimatedWave(
-                    duration: duration,
+                  SizedBox(
+                    width: 238,
+                    child: _AnimatedWave(duration: duration),
                   ),
                   const SizedBox(height: 8),
                   Text(
@@ -142,7 +141,7 @@ class AudioMessage extends HookWidget {
   }
 }
 
-class _AnimatedWave extends HookWidget {
+class _AnimatedWave extends HookConsumerWidget {
   const _AnimatedWave({
     required this.duration,
   });
@@ -150,7 +149,7 @@ class _AnimatedWave extends HookWidget {
   final Duration duration;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final mediaWaveform =
         useMessageConverter(converter: (state) => state.mediaWaveform ?? '');
     final mediaStatus =
@@ -192,9 +191,9 @@ class _AnimatedWave extends HookWidget {
 
 class AudioMessagesPlayAgent {
   AudioMessagesPlayAgent(
-    this._list,
+    List<MessageItem> list,
     this.convertMessageAbsolutePath,
-  );
+  ) : _list = list.where((e) => e.type.isAudio).toList();
 
   final List<MessageItem> _list;
   final String Function(MessageItem? messageItem) convertMessageAbsolutePath;

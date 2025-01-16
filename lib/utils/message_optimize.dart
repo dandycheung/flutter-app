@@ -28,7 +28,8 @@ String? messagePreviewOptimize(
     _content = Localization.current.messageNotSupport;
   } else if (messageCategory.isText) {
     _content = trimContent;
-  } else if (messageCategory == MessageCategory.systemAccountSnapshot) {
+  } else if (messageCategory == MessageCategory.systemAccountSnapshot ||
+      messageCategory == MessageCategory.systemSafeSnapshot) {
     _content = '[${Localization.current.transfer}]';
   } else if (messageCategory.isSticker) {
     _content = '[${Localization.current.sticker}]';
@@ -60,8 +61,7 @@ String? messagePreviewOptimize(
     _content = '[${Localization.current.card}]';
     try {
       _content =
-          AppCardData.fromJson(jsonDecode(trimContent!) as Map<String, dynamic>)
-              .title;
+          '[${AppCardData.fromJson(jsonDecode(trimContent!) as Map<String, dynamic>).title}]';
     } catch (_) {}
   } else if (messageCategory.isContact) {
     _content = '[${Localization.current.contact}]';
@@ -72,6 +72,8 @@ String? messagePreviewOptimize(
         '[${isCurrentUser ? Localization.current.youDeletedThisMessage : Localization.current.thisMessageWasDeleted}]';
   } else if (messageCategory.isTranscript) {
     _content = '[${Localization.current.transcript}]';
+  } else if (messageCategory == MessageCategory.systemSafeInscription) {
+    _content = '[${Localization.current.collectible}]';
   } else {
     _content = Localization.current.messageNotSupport;
   }
@@ -93,7 +95,9 @@ String? messagePreviewIcon(
 
   if (messageStatus == MessageStatus.failed) {
   } else if (messageCategory.isText) {
-  } else if (messageCategory == MessageCategory.systemAccountSnapshot) {
+  } else if (messageCategory == MessageCategory.systemAccountSnapshot ||
+      messageCategory == MessageCategory.systemSafeSnapshot ||
+      messageCategory == MessageCategory.systemSafeInscription) {
     icon = Resources.assetsImagesTransferSvg;
   } else if (messageCategory.isSticker) {
     icon = Resources.assetsImagesStickerSvg;

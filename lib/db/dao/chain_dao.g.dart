@@ -16,7 +16,6 @@ mixin _$ChainDaoMixin on DatabaseAccessor<MixinDatabase> {
   Jobs get jobs => attachedDatabase.jobs;
   MessageMentions get messageMentions => attachedDatabase.messageMentions;
   Messages get messages => attachedDatabase.messages;
-  MessagesFts get messagesFts => attachedDatabase.messagesFts;
   MessagesHistory get messagesHistory => attachedDatabase.messagesHistory;
   Offsets get offsets => attachedDatabase.offsets;
   ParticipantSession get participantSession =>
@@ -39,4 +38,10 @@ mixin _$ChainDaoMixin on DatabaseAccessor<MixinDatabase> {
   FavoriteApps get favoriteApps => attachedDatabase.favoriteApps;
   ExpiredMessages get expiredMessages => attachedDatabase.expiredMessages;
   Chains get chains => attachedDatabase.chains;
+  Properties get properties => attachedDatabase.properties;
+  SafeSnapshots get safeSnapshots => attachedDatabase.safeSnapshots;
+  Tokens get tokens => attachedDatabase.tokens;
+  InscriptionCollections get inscriptionCollections =>
+      attachedDatabase.inscriptionCollections;
+  InscriptionItems get inscriptionItems => attachedDatabase.inscriptionItems;
 }

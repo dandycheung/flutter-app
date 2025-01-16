@@ -1,22 +1,18 @@
-import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:emojis/emoji.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:flutter_svg/svg.dart';
-import 'package:hydrated_bloc/hydrated_bloc.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../account/account_key_value.dart';
 import '../../constants/resources.dart';
+import '../../utils/emoji.dart';
 import '../../utils/extension/extension.dart';
 import '../interactive_decorated_box.dart';
 
-class EmojiScrollOffsetCubit extends Cubit<double> {
-  EmojiScrollOffsetCubit() : super(0);
-
-  void setOffset(double offset) => emit(offset);
-}
+final _emojiScrollOffsetProvider = StateProvider<double>((ref) => 0);
 
 const emojiGroups = [
   [EmojiGroup.smileysEmotion, EmojiGroup.peopleBody],
@@ -29,9 +25,6 @@ const emojiGroups = [
   [EmojiGroup.flags],
 ];
 
-// ignore: avoid-non-ascii-symbols
-const macOSIgnoreEmoji = {'☺️', '☹️'};
-
 class EmojiPage extends StatelessWidget {
   const EmojiPage({super.key});
 
@@ -43,13 +36,13 @@ class EmojiPage extends StatelessWidget {
       );
 }
 
-class _EmojiPageBody extends HookWidget {
+class _EmojiPageBody extends HookConsumerWidget {
   const _EmojiPageBody({required this.layoutWidth});
 
   final double layoutWidth;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     const emojiGroupIcon = [
       Resources.assetsImagesEmojiRecentSvg,
       Resources.assetsImagesEmojiFaceSvg,
@@ -62,7 +55,7 @@ class _EmojiPageBody extends HookWidget {
       Resources.assetsImagesEmojiFlagsSvg,
     ];
 
-    final offset = context.watch<EmojiScrollOffsetCubit>().state;
+    final offset = ref.watch(_emojiScrollOffsetProvider);
 
     final emojiLineStride = useRef(8);
 
@@ -85,8 +78,6 @@ class _EmojiPageBody extends HookWidget {
               ...emojiGroups.map(
                 (group) => group
                     .expand(Emoji.byGroup)
-                    .where((e) =>
-                        !Platform.isMacOS || !macOSIgnoreEmoji.contains(e.char))
                     .where((e) => !e.modifiable)
                     .map((emoji) => emoji.char)
                     .toList(),
@@ -124,9 +115,8 @@ class _EmojiPageBody extends HookWidget {
           selectedIndex: selectedIndex,
           icons: emojiGroupIcon,
           onTap: (index) {
-            context
-                .read<EmojiScrollOffsetCubit>()
-                .setOffset(groupOffset[index]);
+            ref.read(_emojiScrollOffsetProvider.notifier).state =
+                groupOffset[index];
             emojiOffsetController.add(groupOffset[index]);
           },
         ),
@@ -148,7 +138,7 @@ class _EmojiPageBody extends HookWidget {
   }
 }
 
-class _EmojiGroupHeader extends HookWidget {
+class _EmojiGroupHeader extends HookConsumerWidget {
   const _EmojiGroupHeader({
     required this.icons,
     required this.onTap,
@@ -160,7 +150,7 @@ class _EmojiGroupHeader extends HookWidget {
   final int selectedIndex;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final tabController = useTabController(initialLength: icons.length);
     useEffect(() {
       tabController.index = selectedIndex;
@@ -175,6 +165,8 @@ class _EmojiGroupHeader extends HookWidget {
           isScrollable: true,
           labelPadding: EdgeInsets.zero,
           indicator: const BoxDecoration(color: Colors.transparent),
+          dividerColor: Colors.transparent,
+          tabAlignment: TabAlignment.start,
           tabs: List.generate(
             icons.length,
             (index) => Padding(
@@ -230,7 +222,7 @@ class _EmojiGroupIcon extends StatelessWidget {
       );
 }
 
-class _AllEmojisPage extends HookWidget {
+class _AllEmojisPage extends HookConsumerWidget {
   const _AllEmojisPage({
     required this.initialOffset,
     required this.offsetStream,
@@ -244,7 +236,7 @@ class _AllEmojisPage extends HookWidget {
   final List<List<String>> groupedEmojis;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final controller = useMemoized(() => ScrollController(
           initialScrollOffset: initialOffset,
         ));
@@ -262,7 +254,7 @@ class _AllEmojisPage extends HookWidget {
 
     useEffect(() {
       void onScroll() {
-        context.read<EmojiScrollOffsetCubit>().setOffset(controller.offset);
+        ref.read(_emojiScrollOffsetProvider.notifier).state = controller.offset;
       }
 
       controller.addListener(onScroll);
@@ -365,7 +357,12 @@ class _EmojiItem extends StatelessWidget {
           child: Center(
             child: Text(
               emoji,
-              style: const TextStyle(fontSize: 26, height: 1),
+              style: TextStyle(
+                fontSize: 26,
+                height: 1,
+                fontFamily: kEmojiFontFamily,
+                inherit: false,
+              ),
               strutStyle: const StrutStyle(height: 1),
               textAlign: TextAlign.center,
             ),

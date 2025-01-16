@@ -1,22 +1,26 @@
+// ignore_for_file: invalid_use_of_protected_member
+
 import 'dart:async';
 
 import 'package:bloc/bloc.dart';
+import 'package:bloc_concurrency/bloc_concurrency.dart';
 import 'package:equatable/equatable.dart';
 import 'package:flutter/widgets.dart';
 import 'package:mixin_bot_sdk_dart/mixin_bot_sdk_dart.dart';
-import 'package:tuple/tuple.dart';
+import 'package:mixin_logger/mixin_logger.dart';
+import 'package:rxdart/rxdart.dart';
 
 import '../../../account/account_server.dart';
 import '../../../bloc/subscribe_mixin.dart';
 import '../../../db/dao/message_dao.dart';
 import '../../../db/database.dart';
+import '../../../db/database_event_bus.dart';
 import '../../../db/mixin_database.dart';
 import '../../../enum/message_category.dart';
 import '../../../utils/app_lifecycle.dart';
 import '../../../utils/extension/extension.dart';
-import '../../../utils/synchronized.dart';
-import '../../../widgets/message/item/text/mention_builder.dart';
-import 'conversation_cubit.dart';
+import '../../provider/conversation_provider.dart';
+import '../../provider/mention_cache_provider.dart';
 
 abstract class _MessageEvent extends Equatable {
   @override
@@ -93,7 +97,7 @@ class MessageState extends Equatable {
       final ids = <String>{};
       for (final item in list) {
         if (ids.contains(item.messageId)) {
-          throw Exception('MessageState has same messageId: ${item.messageId}');
+          e('MessageState has same messageId: ${item.messageId}');
         }
         ids.add(item.messageId);
       }
@@ -168,22 +172,29 @@ class MessageState extends Equatable {
 
   MessageState removeMessage(String messageId) {
     if (center?.messageId == messageId) {
-      return copyWith();
-    }
-
-    var message =
-        top.firstWhereOrNull((message) => message.messageId == messageId);
-    if (message != null) {
-      return copyWith(
-        top: top.toList()..remove(message),
+      return MessageState(
+        conversationId: conversationId,
+        top: top,
+        bottom: bottom,
+        isLatest: isLatest,
+        isOldest: isOldest,
+        lastReadMessageId: lastReadMessageId,
+        refreshKey: refreshKey,
       );
     }
 
-    message =
-        bottom.firstWhereOrNull((message) => message.messageId == messageId);
-    if (message != null) {
+    bool include(MessageItem message) => message.messageId == messageId;
+    bool exclusive(MessageItem message) => message.messageId != messageId;
+
+    if (top.any(include)) {
       return copyWith(
-        top: bottom.toList()..remove(message),
+        top: top.where(exclusive).toList(),
+      );
+    }
+
+    if (bottom.any(include)) {
+      return copyWith(
+        bottom: bottom.where(exclusive).toList(),
       );
     }
 
@@ -195,24 +206,27 @@ class MessageState extends Equatable {
 class MessageBloc extends Bloc<_MessageEvent, MessageState>
     with SubscribeMixin {
   MessageBloc({
-    required this.conversationCubit,
+    required this.conversationNotifier,
     required this.limit,
     required this.database,
     required this.mentionCache,
     required this.accountServer,
   }) : super(MessageState()) {
-    on<_MessageEvent>((event, emit) => _lock.synchronized(
-          () => _onEvent(event, emit),
-        ));
+    on<_MessageEvent>(
+      (event, emit) async {
+        await _onEvent(event, emit);
+      },
+      transformer: sequential(),
+    );
 
     add(_MessageInitEvent(
-      centerMessageId: conversationCubit.state?.initIndexMessageId,
-      lastReadMessageId: conversationCubit.state?.lastReadMessageId,
+      centerMessageId: conversationNotifier.state?.initIndexMessageId,
+      lastReadMessageId: conversationNotifier.state?.lastReadMessageId,
     ));
     addSubscription(
-      conversationCubit.stream
+      conversationNotifier.stream
           .where((event) => event?.conversationId != null)
-          .map((event) => Tuple4(
+          .map((event) => (
                 event?.conversationId,
                 event?.initIndexMessageId,
                 event?.lastReadMessageId,
@@ -221,30 +235,40 @@ class MessageBloc extends Bloc<_MessageEvent, MessageState>
           .distinct()
           .asyncMap(
             (event) async => _MessageInitEvent(
-              centerMessageId: event.item2,
-              lastReadMessageId: event.item3,
+              centerMessageId: event.$2,
+              lastReadMessageId: event.$3,
             ),
           )
           .listen(add),
     );
 
     addSubscription(
-      messageDao.insertOrReplaceMessageStream
-          .listen((state) => add(_MessageInsertOrReplaceEvent(state))),
+      conversationNotifier.stream
+          .startWith(conversationNotifier.state)
+          .map((event) => event?.conversationId)
+          .distinct()
+          .switchMap((conversationId) {
+        if (conversationId == null) {
+          return const Stream<List<MessageItem>>.empty();
+        }
+        return messageDao.watchInsertOrReplaceMessageStream(conversationId);
+      }).listen((state) => add(_MessageInsertOrReplaceEvent(state))),
     );
 
-    addSubscription(messageDao.deleteMessageIdStream
-        .listen((messageId) => add(_MessageDeleteEvent(messageId))));
+    addSubscription(
+        DataBaseEventBus.instance.deleteMessageIdStream.listen((messageIds) {
+      messageIds.forEach((messageId) {
+        add(_MessageDeleteEvent(messageId));
+      });
+    }));
   }
 
   final ScrollController scrollController = ScrollController();
-  final ConversationCubit conversationCubit;
+  final ConversationStateNotifier conversationNotifier;
   final Database database;
   final MentionCache mentionCache;
   final AccountServer accountServer;
   int limit;
-
-  final _lock = Lock();
 
   MessageDao get messageDao => database.messageDao;
 
@@ -252,7 +276,7 @@ class MessageBloc extends Bloc<_MessageEvent, MessageState>
     final set = {...state.top, state.center, ...state.bottom};
     await mentionCache.checkMentionCache(
       {...set.map((e) => e?.content), ...set.map((e) => e?.quoteContent)}
-          .whereNotNull()
+          .nonNulls
           .toSet(),
     );
   }
@@ -261,7 +285,7 @@ class MessageBloc extends Bloc<_MessageEvent, MessageState>
     // Avoid value change
     final finalLimit = limit;
 
-    final conversationId = conversationCubit.state?.conversationId;
+    final conversationId = conversationNotifier.state?.conversationId;
     if (conversationId == null) return;
     // If the conversationId has changed, then events other than init are ignored
     if (event is! _MessageInitEvent && state.conversationId != conversationId) {
@@ -319,12 +343,10 @@ class MessageBloc extends Bloc<_MessageEvent, MessageState>
   Future<MessageState> _before(String conversationId) async {
     final topMessageId = state.topMessage?.messageId;
     assert(topMessageId != null);
-    final list = await database.transaction(() async {
-      final rowId = await messageDao.messageRowId(topMessageId!).getSingle();
-      return messageDao
-          .beforeMessagesByConversationId(rowId!, conversationId, limit)
-          .get();
-    });
+    final info = await messageDao.messageOrderInfo(topMessageId!);
+    final list = await messageDao
+        .beforeMessagesByConversationId(info!, conversationId, limit)
+        .get();
 
     final isOldest = list.length < limit;
     return state
@@ -334,12 +356,10 @@ class MessageBloc extends Bloc<_MessageEvent, MessageState>
   Future<MessageState> _after(String conversationId) async {
     final bottomMessageId = state.bottomMessage?.messageId;
     assert(bottomMessageId != null);
-    final list = await database.transaction(() async {
-      final rowId = await messageDao.messageRowId(bottomMessageId!).getSingle();
-      return messageDao
-          .afterMessagesByConversationId(rowId!, conversationId, limit)
-          .get();
-    });
+    final info = await messageDao.messageOrderInfo(bottomMessageId!);
+    final list = await messageDao
+        .afterMessagesByConversationId(info!, conversationId, limit)
+        .get();
 
     final isLatest = list.length < limit ? true : null;
     return state
@@ -351,7 +371,7 @@ class MessageBloc extends Bloc<_MessageEvent, MessageState>
     int limit, [
     String? centerMessageId,
   ]) async {
-    final conversation = conversationCubit.state?.conversation;
+    final conversation = conversationNotifier.state?.conversation;
     final _centerMessageId = centerMessageId ??
         ((conversation?.unseenMessageCount ?? 0) > 0
             ? conversation?.lastReadMessageId
@@ -392,50 +412,40 @@ class MessageBloc extends Bloc<_MessageEvent, MessageState>
 
     if (centerMessageId == null) return recentMessages();
 
-    return database.transaction(() async {
-      final rowId =
-          await messageDao.messageRowId(centerMessageId).getSingleOrNull();
-      if (rowId == null) {
-        return recentMessages();
-      }
-      final _limit = limit ~/ 2;
-      var bottomList = await messageDao
-          .afterMessagesByConversationId(rowId, conversationId, _limit + 1,
-              orEqual: true)
-          .get();
-      var topList = (await messageDao
-              .beforeMessagesByConversationId(rowId, conversationId, _limit)
-              .get())
-          .reversed
-          .toList();
+    final info = await messageDao.messageOrderInfo(centerMessageId);
+    if (info == null) {
+      return recentMessages();
+    }
 
-      final isLatest = bottomList.length < _limit + 1;
-      final isOldest = topList.length < _limit;
+    final _limit = limit ~/ 2;
+    final bottomList = await messageDao
+        .afterMessagesByConversationId(info, conversationId, _limit)
+        .get();
+    var topList = (await messageDao
+            .beforeMessagesByConversationId(info, conversationId, _limit)
+            .get())
+        .reversed
+        .toList();
 
-      MessageItem? center;
+    final isLatest = bottomList.length < _limit;
+    final isOldest = topList.length < _limit;
 
-      bottomList = bottomList.fold(<MessageItem>[], (previousValue, element) {
-        if (center == null && element.messageId == centerMessageId) {
-          center = element;
-        } else {
-          previousValue.add(element);
-        }
-        return previousValue;
-      });
+    var center = await messageDao
+        .messageItemByMessageId(centerMessageId)
+        .getSingleOrNull();
 
-      if (bottomList.isEmpty && center != null) {
-        topList = [...topList, center!];
-        center = null;
-      }
+    if (bottomList.isEmpty && center != null) {
+      topList = [...topList, center];
+      center = null;
+    }
 
-      return MessageState(
-        top: topList,
-        center: center,
-        bottom: bottomList,
-        isLatest: isLatest,
-        isOldest: isOldest,
-      );
-    });
+    return MessageState(
+      top: topList,
+      center: center,
+      bottom: bottomList,
+      isLatest: isLatest,
+      isOldest: isOldest,
+    );
   }
 
   MessageState? _insertOrReplace(
@@ -524,7 +534,7 @@ class MessageBloc extends Bloc<_MessageEvent, MessageState>
   MessageState _pretreatment(MessageState messageState) {
     List<MessageItem>? top;
     // check secretMessage
-    if (messageState.isOldest && conversationCubit.state?.isBot == false) {
+    if (messageState.isOldest && conversationNotifier.state?.isBot == false) {
       if (messageState.top.firstOrNull?.type == MessageCategory.secret) {
         messageState.top.remove(messageState.top.first);
       }
@@ -549,7 +559,7 @@ class MessageBloc extends Bloc<_MessageEvent, MessageState>
       top: top,
     );
     if (isAppActive) {
-      accountServer.markRead(conversationCubit.state!.conversationId);
+      accountServer.markRead(conversationNotifier.state!.conversationId);
     }
     return _messageState;
   }

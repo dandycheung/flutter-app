@@ -2,33 +2,36 @@ import 'dart:async';
 
 import 'package:flutter_app_icon_badge/flutter_app_icon_badge.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:rxdart/rxdart.dart' hide ThrottleExtensions;
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../../../bloc/paging/paging_bloc.dart';
 import '../../../bloc/subscribe_mixin.dart';
+import '../../../db/dao/conversation_dao.dart';
 import '../../../db/database.dart';
-import '../../../db/mixin_database.dart';
+import '../../../db/database_event_bus.dart';
+import '../../../utils/extension/extension.dart';
 import '../../../utils/logger.dart';
 import '../../../utils/platform.dart';
-import '../../../widgets/message/item/text/mention_builder.dart';
-import 'slide_category_cubit.dart';
+import '../../provider/mention_cache_provider.dart';
+import '../../provider/slide_category_provider.dart';
 
 const kDefaultLimit = 15;
 
 class ConversationListBloc extends Cubit<PagingState<ConversationItem>>
     with SubscribeMixin {
   ConversationListBloc(
-    this.slideCategoryCubit,
+    this.slideCategoryStateNotifier,
     this.database,
     this.mentionCache,
   ) : super(const PagingState<ConversationItem>()) {
-    addSubscription(slideCategoryCubit.stream
+    addSubscription(slideCategoryStateNotifier.stream
         .distinct()
         .listen((event) => _switchBloc(event, _limit)));
     _initBadge();
   }
 
-  final SlideCategoryCubit slideCategoryCubit;
+  final SlideCategoryStateNotifier slideCategoryStateNotifier;
   final Database database;
   final MentionCache mentionCache;
   final Map<SlideCategoryState, _ConversationListBloc> _map = {};
@@ -57,21 +60,38 @@ class ConversationListBloc extends Cubit<PagingState<ConversationItem>>
 
   StreamSubscription? streamSubscription;
 
-  ItemPositionsListener itemPositionsListener(
+  ItemPositionsListener? itemPositionsListener(
           SlideCategoryState slideCategoryState) =>
-      _map[slideCategoryState]!.itemPositionsListener;
+      _map[slideCategoryState]?.itemPositionsListener;
 
-  ItemScrollController itemScrollController(
+  ItemScrollController? itemScrollController(
           SlideCategoryState slideCategoryState) =>
-      _map[slideCategoryState]!.itemScrollController;
+      _map[slideCategoryState]?.itemScrollController;
 
-  void init() => _switchBloc(slideCategoryCubit.state, _limit);
+  void init() => _switchBloc(slideCategoryStateNotifier.state, _limit);
+
+  late Stream<void> updateEvent = Rx.merge([
+    DataBaseEventBus.instance.updateConversationIdStream,
+    DataBaseEventBus.instance.updateUserIdsStream,
+    DataBaseEventBus.instance.insertOrReplaceMessageIdsStream,
+    DataBaseEventBus.instance.updateMessageMentionStream,
+  ]).throttleTime(kDefaultThrottleDuration).asBroadcastStream();
+
+  late Stream<void> circleUpdateEvent = Rx.merge([
+    DataBaseEventBus.instance.updateConversationIdStream,
+    DataBaseEventBus.instance.updateUserIdsStream,
+    DataBaseEventBus.instance.insertOrReplaceMessageIdsStream,
+    DataBaseEventBus.instance.updateMessageMentionStream,
+    DataBaseEventBus.instance.updateCircleStream,
+    DataBaseEventBus.instance.updateCircleConversationStream,
+  ]).throttleTime(kDefaultThrottleDuration).asBroadcastStream();
 
   void _switchBloc(
     SlideCategoryState state,
     int? limit,
   ) {
     final dao = database.conversationDao;
+
     switch (state.type) {
       case SlideCategoryType.chats:
       case SlideCategoryType.contacts:
@@ -82,12 +102,11 @@ class ConversationListBloc extends Cubit<PagingState<ConversationItem>>
           limit ?? kDefaultLimit,
           () => dao.conversationCountByCategory(state.type),
           (limit, offset) =>
-              dao.conversationItemsByCategory(state.type, limit, offset),
-          database.conversationDao.updateEvent,
+              dao.conversationItemsByCategory(state.type, limit, offset).get(),
+          updateEvent,
           mentionCache,
           () => dao.conversationHasDataByCategory(state.type),
         );
-        break;
       case SlideCategoryType.circle:
         _map[state] ??= _ConversationListBloc(
           limit ?? kDefaultLimit,
@@ -97,12 +116,11 @@ class ConversationListBloc extends Cubit<PagingState<ConversationItem>>
           (limit, offset) => database.conversationDao
               .conversationsByCircleId(state.id!, limit, offset)
               .get(),
-          database.conversationDao.updateEvent,
+          circleUpdateEvent,
           mentionCache,
           () =>
               database.conversationDao.conversationHasDataByCircleId(state.id!),
         );
-        break;
       case SlideCategoryType.setting:
         return;
     }
@@ -137,7 +155,8 @@ class ConversationListBloc extends Cubit<PagingState<ConversationItem>>
     await updateBadge(count);
     addSubscription(database
         .conversationDao.allUnseenIgnoreMuteMessageCountEvent
-        .asyncMap(updateBadge)
+        .distinct()
+        .asyncBufferMap((event) => updateBadge(event.last))
         .listen((_) {}));
   }
 }

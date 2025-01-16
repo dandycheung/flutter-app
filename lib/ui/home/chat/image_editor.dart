@@ -7,6 +7,7 @@ import 'package:equatable/equatable.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:image/image.dart' as img;
 
 import '../../../bloc/subscribe_mixin.dart';
@@ -33,7 +34,7 @@ Future<ImageEditorSnapshot?> showImageEditor(
       ),
     );
 
-class _ImageEditorDialog extends HookWidget {
+class _ImageEditorDialog extends HookConsumerWidget {
   const _ImageEditorDialog({
     required this.path,
     this.snapshot,
@@ -44,13 +45,13 @@ class _ImageEditorDialog extends HookWidget {
   final ImageEditorSnapshot? snapshot;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final boundaryKey = useMemoized(GlobalKey.new);
     final image = useMemoizedFuture<ui.Image?>(() async {
       final bytes = File(path).readAsBytesSync();
       final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
-      final codec = await PaintingBinding.instance
-          .instantiateImageCodecFromBuffer(buffer);
+      final codec =
+          await PaintingBinding.instance.instantiateImageCodecWithSize(buffer);
       final frame = await codec.getNextFrame();
       return frame.image;
     }, null, keys: [path]);
@@ -68,7 +69,7 @@ class _ImageEditorDialog extends HookWidget {
       child: BackdropFilter(
         filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
         child: ColoredBox(
-          color: context.theme.background.withOpacity(0.8),
+          color: context.theme.background.withValues(alpha: 0.8),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Column(
@@ -401,6 +402,7 @@ class _ImageEditorBloc extends Cubit<_ImageEditorState> with SubscribeMixin {
       width: image.width,
       height: image.height,
       bytes: bytes.buffer,
+      order: img.ChannelOrder.rgba,
     );
 
     if (state.flip) {
@@ -514,7 +516,7 @@ class _ImageEditorBloc extends Cubit<_ImageEditorState> with SubscribeMixin {
   }
 }
 
-class _Preview extends HookWidget {
+class _Preview extends HookConsumerWidget {
   const _Preview({
     required this.path,
     required this.viewPortSize,
@@ -531,7 +533,7 @@ class _Preview extends HookWidget {
   final ui.Image image;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final isFlip =
         useBlocStateConverter<_ImageEditorBloc, _ImageEditorState, bool>(
       converter: (state) => state.flip,
@@ -658,7 +660,7 @@ Rect transformInsideRect(Rect rect, Rect parent, double radius) {
   return transformed.translate(-rotateImageRect.left, -rotateImageRect.top);
 }
 
-class _CropRectWidget extends HookWidget {
+class _CropRectWidget extends HookConsumerWidget {
   const _CropRectWidget({
     required this.scaledImageSize,
     required this.isFlip,
@@ -672,7 +674,7 @@ class _CropRectWidget extends HookWidget {
   final double scale;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final cropRect =
         useBlocStateConverter<_ImageEditorBloc, _ImageEditorState, Rect>(
       converter: (state) => state.cropRect,
@@ -744,29 +746,24 @@ class _CropRectWidget extends HookWidget {
                   currentCropRect.topLeft + delta,
                   currentCropRect.bottomRight,
                 ).ensureInside(imageRect);
-                break;
               case _ImageDragArea.topRight:
                 cropRect = Rect.fromPoints(
                   currentCropRect.bottomLeft,
                   currentCropRect.topRight + delta,
                 ).ensureInside(imageRect);
-                break;
               case _ImageDragArea.bottomLeft:
                 cropRect = Rect.fromPoints(
                   currentCropRect.bottomLeft + delta,
                   currentCropRect.topRight,
                 ).ensureInside(imageRect);
-                break;
               case _ImageDragArea.bottomRight:
                 cropRect = Rect.fromPoints(
                   currentCropRect.topLeft,
                   currentCropRect.bottomRight + delta,
                 ).ensureInside(imageRect);
-                break;
               case _ImageDragArea.center:
                 cropRect =
                     currentCropRect.shift(delta).ensureShiftInside(imageRect);
-                break;
             }
 
             if (cropRect.isEmpty) {
@@ -786,7 +783,7 @@ class _CropRectWidget extends HookWidget {
           child: CustomPaint(
             painter: _CropShadowOverlayPainter(
               cropRect: cacheTransformedRect.value,
-              overlayColor: Colors.black.withOpacity(0.4),
+              overlayColor: Colors.black.withValues(alpha: 0.4),
               lineColor: Colors.white,
             ),
             child: const SizedBox.expand(),
@@ -909,7 +906,7 @@ class _CropShadowOverlayPainter extends CustomPainter {
       oldDelegate.lineColor != lineColor;
 }
 
-class _CustomDrawingWidget extends HookWidget {
+class _CustomDrawingWidget extends HookConsumerWidget {
   const _CustomDrawingWidget({
     required this.viewPortSize,
     required this.image,
@@ -923,7 +920,7 @@ class _CustomDrawingWidget extends HookWidget {
   final bool flip;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final transformedViewPortSize = rotate.apply(viewPortSize);
     final scale = math.min<double>(
         math.min(transformedViewPortSize.width / image.width,
@@ -1103,11 +1100,11 @@ class _DrawerPainter extends CustomPainter {
       oldDelegate.scale != scale;
 }
 
-class _DrawColorSelector extends HookWidget {
+class _DrawColorSelector extends HookConsumerWidget {
   const _DrawColorSelector();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final isCustomColor = useState(false);
     return SizedBox(
       height: 38,
@@ -1147,13 +1144,13 @@ const _kPresetColors = [
 
 const _kDefaultDrawColor = Color(0xFFE84D3D);
 
-class _NormalColorTile extends HookWidget {
+class _NormalColorTile extends HookConsumerWidget {
   const _NormalColorTile({required this.color});
 
   final Color color;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final currentColor =
         useBlocStateConverter<_ImageEditorBloc, _ImageEditorState, Color>(
       converter: (state) => state.drawColor,
@@ -1266,7 +1263,7 @@ class _CustomColorTile extends StatelessWidget {
       );
 }
 
-class _CustomColorBar extends HookWidget {
+class _CustomColorBar extends HookConsumerWidget {
   const _CustomColorBar({
     required this.onColorSelected,
   });
@@ -1274,7 +1271,7 @@ class _CustomColorBar extends HookWidget {
   final void Function(Color color) onColorSelected;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final initialHue = useMemoized(() {
       final color = context.read<_ImageEditorBloc>().state.drawColor;
       return HSLColor.fromColor(color).hue;
@@ -1326,7 +1323,7 @@ class _CustomColorBar extends HookWidget {
               },
               child: Material(
                 color: Colors.white,
-                shadowColor: Colors.black.withOpacity(0.2),
+                shadowColor: Colors.black.withValues(alpha: 0.2),
                 borderRadius: const BorderRadius.all(Radius.circular(58)),
                 elevation: 4,
                 child: const SizedBox(width: 9, height: 30),
@@ -1339,11 +1336,11 @@ class _CustomColorBar extends HookWidget {
   }
 }
 
-class _ResetButton extends HookWidget {
+class _ResetButton extends HookConsumerWidget {
   const _ResetButton();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final canReset =
         useBlocStateConverter<_ImageEditorBloc, _ImageEditorState, bool>(
       converter: (state) => state.canReset,
@@ -1362,11 +1359,11 @@ class _ResetButton extends HookWidget {
   }
 }
 
-class _OperationButtons extends HookWidget {
+class _OperationButtons extends HookConsumerWidget {
   const _OperationButtons();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final drawMode =
         useBlocStateConverter<_ImageEditorBloc, _ImageEditorState, DrawMode>(
       converter: (state) => state.drawMode,
@@ -1387,11 +1384,11 @@ class _OperationButtons extends HookWidget {
   }
 }
 
-class _NormalOperationBar extends HookWidget {
+class _NormalOperationBar extends HookConsumerWidget {
   const _NormalOperationBar();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final imageEditorBloc = context.read<_ImageEditorBloc>();
 
     final rotated =
@@ -1450,47 +1447,30 @@ class _NormalOperationBar extends HookWidget {
               onTap: imageEditorBloc.flip,
             ),
             const SizedBox(width: 4),
-            ContextMenuPortalEntry(
-              interactiveForTap: true,
-              buildMenus: () => [
-                ContextMenu(
+            CustomPopupMenuButton<double>(
+              alignment: Alignment.topCenter,
+              itemBuilder: (context) => [
+                CustomPopupMenuItem(
                   title: context.l10n.originalImage,
-                  onTap: () => imageEditorBloc.setCropRatio(null),
+                  value: 0,
                 ),
-                ContextMenu(
-                  title: '1:1',
-                  onTap: () => imageEditorBloc.setCropRatio(1),
-                ),
-                ContextMenu(
-                  title: '2:3',
-                  onTap: () => imageEditorBloc.setCropRatio(2 / 3),
-                ),
-                ContextMenu(
-                  title: '3:2',
-                  onTap: () => imageEditorBloc.setCropRatio(3 / 2),
-                ),
-                ContextMenu(
-                  title: '3:4',
-                  onTap: () => imageEditorBloc.setCropRatio(3 / 4),
-                ),
-                ContextMenu(
-                  title: '4:3',
-                  onTap: () => imageEditorBloc.setCropRatio(4 / 3),
-                ),
-                ContextMenu(
-                  title: '9:16',
-                  onTap: () => imageEditorBloc.setCropRatio(9 / 16),
-                ),
-                ContextMenu(
-                  title: '16:9',
-                  onTap: () => imageEditorBloc.setCropRatio(16 / 9),
-                ),
+                CustomPopupMenuItem(title: '1:1', value: 1),
+                CustomPopupMenuItem(title: '2:3', value: 2 / 3),
+                CustomPopupMenuItem(title: '3:2', value: 3 / 2),
+                CustomPopupMenuItem(title: '3:4', value: 3 / 4),
+                CustomPopupMenuItem(title: '4:3', value: 4 / 3),
+                CustomPopupMenuItem(title: '9:16', value: 9 / 16),
+                CustomPopupMenuItem(title: '16:9', value: 16 / 9),
               ],
-              child: ActionButton(
-                interactive: false,
-                color: hasCrop ? context.theme.accent : context.theme.icon,
-                name: Resources.assetsImagesEditImageClipSvg,
-              ),
+              onSelected: (value) {
+                if (value == 0) {
+                  imageEditorBloc.setCropRatio(null);
+                } else {
+                  imageEditorBloc.setCropRatio(value);
+                }
+              },
+              color: hasCrop ? context.theme.accent : context.theme.icon,
+              icon: Resources.assetsImagesEditImageClipSvg,
             ),
             const SizedBox(width: 4),
             ActionButton(
@@ -1521,11 +1501,11 @@ class _NormalOperationBar extends HookWidget {
   }
 }
 
-class _DrawOperationBar extends HookWidget {
+class _DrawOperationBar extends HookConsumerWidget {
   const _DrawOperationBar();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final drawMode =
         useBlocStateConverter<_ImageEditorBloc, _ImageEditorState, DrawMode>(
       converter: (state) => state.drawMode,
@@ -1558,7 +1538,7 @@ class _DrawOperationBar extends HookWidget {
             ActionButton(
               color: canUndo
                   ? context.theme.icon
-                  : context.theme.icon.withOpacity(0.2),
+                  : context.theme.icon.withValues(alpha: 0.2),
               name: Resources.assetsImagesEditImageUndoSvg,
               onTap: () {
                 context.read<_ImageEditorBloc>().undoDraw();
@@ -1568,7 +1548,7 @@ class _DrawOperationBar extends HookWidget {
             ActionButton(
               color: canRedo
                   ? context.theme.icon
-                  : context.theme.icon.withOpacity(0.2),
+                  : context.theme.icon.withValues(alpha: 0.2),
               name: Resources.assetsImagesEditImageRedoSvg,
               onTap: () {
                 context.read<_ImageEditorBloc>().redoDraw();

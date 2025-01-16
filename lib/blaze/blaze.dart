@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:archive/archive.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' hide Key;
 import 'package:mixin_bot_sdk_dart/mixin_bot_sdk_dart.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:web_socket_channel/io.dart';
@@ -14,12 +14,15 @@ import '../db/extension/job.dart';
 import '../db/mixin_database.dart';
 import '../utils/extension/extension.dart';
 import '../utils/logger.dart';
+import '../utils/proxy.dart';
+import '../workers/job/ack_job.dart';
+import '../workers/job/flood_job.dart';
 import '../workers/message_worker_isolate.dart';
 import 'blaze_message.dart';
 import 'blaze_message_param_session.dart';
 
-const String _wsHost1 = 'wss://blaze.mixin.one';
-const String _wsHost2 = 'wss://mixin-blaze.zeromesh.net';
+const String _wsHost1 = 'wss://blaze.mixin.one:443';
+const String _wsHost2 = 'wss://mixin-blaze.zeromesh.net:443';
 
 enum ConnectedState {
   connecting,
@@ -37,15 +40,24 @@ class Blaze {
     this.database,
     this.client,
     this.userAgent,
-  );
+    this.ackJob,
+    this.floodJob,
+  ) {
+    database.settingProperties.addListener(_onProxySettingChanged);
+    proxyConfig = database.settingProperties.activatedProxy;
+  }
 
   final String userId;
   final String sessionId;
   final String privateKey;
   final Database database;
   final Client client; // todo delete
+  final AckJob ackJob;
+  final FloodJob floodJob;
 
   final String? userAgent;
+
+  ProxyConfig? proxyConfig;
 
   String _host = _wsHost1;
   String? _token;
@@ -82,14 +94,14 @@ class Blaze {
     try {
       i('ws connect');
       _token ??= signAuthTokenWithEdDSA(
-          userId, sessionId, privateKey, scp, 'GET', '/', '');
+          userId, sessionId, Key.fromBase64(privateKey), scp, 'GET', '/', '');
       i('ws _token?.isNotEmpty == true: ${_token?.isNotEmpty == true}');
       i('ws _userAgent: $userAgent');
       _connect(_token!);
       _checkTimeoutTimer = Timer(const Duration(seconds: 10), () {
-        i('ws webSocket state: ${channel?.innerWebSocket?.readyState}');
+        i('ws webSocket state: ${channel?.ready}');
 
-        if (channel?.innerWebSocket?.readyState == WebSocket.open) return;
+        // if (channel?.innerWebSocket?.readyState == WebSocket.open) return;
         if (_connectedState == ConnectedState.connected) return;
         _connectedState = ConnectedState.disconnected;
 
@@ -115,6 +127,7 @@ class Blaze {
         'Authorization': 'Bearer $token',
       },
       pingInterval: const Duration(seconds: 10),
+      customClient: HttpClient()..setProxy(proxyConfig),
     );
     subscription =
         channel?.stream.cast<List<int>>().asyncMap(parseBlazeMessage).listen(
@@ -181,27 +194,37 @@ class Blaze {
     }
     if (blazeMessage.action == kAcknowledgeMessageReceipt) {
       await makeMessageStatus(data.messageId, data.status);
-      await database.offsetDao.insert(Offset(
-          key: statusOffset, timestamp: data.updatedAt.toIso8601String()));
+
+      final offset =
+          await database.offsetDao.findStatusOffset().getSingleOrNull();
+      final timestamp = data.updatedAt.toIso8601String();
+
+      if (offset == null || offset != timestamp) {
+        await database.offsetDao.insert(
+          Offset(key: statusOffset, timestamp: timestamp),
+        );
+      }
     } else if (blazeMessage.action == kCreateMessage) {
       if (data.userId == userId &&
           (data.category == null || data.conversationId.isEmpty)) {
         await makeMessageStatus(data.messageId, data.status);
       } else {
-        await database.floodMessageDao.insert(FloodMessage(
+        await floodJob.add(FloodMessage(
             messageId: data.messageId,
             data: jsonEncode(data),
             createdAt: data.createdAt));
       }
     } else if (blazeMessage.action == kCreateCall ||
         blazeMessage.action == kCreateKraken) {
-      await database.jobDao.insertNoReplace(createAckJob(
-          kAcknowledgeMessageReceipts, data.messageId, MessageStatus.read));
+      await ackJob.add([
+        createAckJob(
+            kAcknowledgeMessageReceipts, data.messageId, MessageStatus.read)
+      ]);
     } else {
-      await database.jobDao.insertNoReplace(createAckJob(
-          kAcknowledgeMessageReceipts,
-          data.messageId,
-          MessageStatus.delivered));
+      await ackJob.add([
+        createAckJob(kAcknowledgeMessageReceipts, data.messageId,
+            MessageStatus.delivered)
+      ]);
     }
     if (stopwatch != null && stopwatch.elapsedMilliseconds > 5) {
       d('handle execution time: ${stopwatch.elapsedMilliseconds}');
@@ -209,8 +232,9 @@ class Blaze {
   }
 
   Future<bool> makeMessageStatus(String messageId, MessageStatus status) async {
-    final currentStatus =
-        await database.messageDao.findMessageStatusById(messageId);
+    final currentStatus = await database.messageDao
+        .messageStatusById(messageId)
+        .getSingleOrNull();
     if (currentStatus != null && status.index > currentStatus.index) {
       await database.messageDao.updateMessageStatusById(messageId, status);
     }
@@ -238,7 +262,7 @@ class Blaze {
       }
       await Future.forEach<BlazeMessageData>(blazeMessages, (m) async {
         if (!(await makeMessageStatus(m.messageId, m.status))) {
-          final messagesHistory = await database.messagesHistoryDao
+          final messagesHistory = await database.messageHistoryDao
               .findMessageHistoryById(m.messageId);
           if (messagesHistory != null) return;
 
@@ -302,25 +326,38 @@ class Blaze {
     _host = _host == _wsHost1 ? _wsHost2 : _wsHost1;
 
     try {
-      _disconnect();
+      _disconnect(false);
       await client.accountApi.getMe();
       i('http ping');
       await connect();
     } catch (e) {
       w('ws ping error: $e');
       if (e is MixinApiError &&
+          e.error != null &&
+          e.error is MixinError &&
           (e.error! as MixinError).code == authentication) {
         _connectedState = ConnectedState.disconnected;
         return;
       }
-      await Future.delayed(const Duration(seconds: 2));
       _connectedState = ConnectedState.disconnected;
+      await Future.delayed(const Duration(seconds: 2));
       i('reconnecting set false, ${StackTrace.current}');
-      return reconnect();
+      await reconnect();
     }
   }
 
+  void _onProxySettingChanged() {
+    final url = database.settingProperties.activatedProxy;
+    if (url == proxyConfig) {
+      return;
+    }
+    proxyConfig = url;
+    _connectedState = ConnectedState.disconnected;
+    reconnect();
+  }
+
   void dispose() {
+    database.settingProperties.removeListener(_onProxySettingChanged);
     _disconnect();
     _connectedStateBehaviorSubject.close();
   }

@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:bloc/bloc.dart';
+import 'package:bloc_concurrency/bloc_concurrency.dart';
 import 'package:equatable/equatable.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
-import 'package:tuple/tuple.dart';
 
 import '../subscribe_mixin.dart';
 
@@ -96,13 +96,31 @@ abstract class PagingBloc<T> extends Bloc<PagingEvent, PagingState<T>>
   PagingBloc({
     required this.itemPositionsListener,
     required this.limit,
+    required PagingState<T> initState,
     this.jumpTo,
     int offset = 0,
     int index = 0,
     double alignment = 0,
-    required PagingState<T> initState,
   }) : super(initState) {
-    on<PagingEvent>(_onEvent);
+    on<PagingUpdateEvent>(
+      (event, emit) async {
+        await _onEvent(event, emit);
+      },
+      transformer: restartable(),
+    );
+    on<PagingItemPositionEvent>(
+      (event, emit) async {
+        await _onEvent(event, emit);
+      },
+      transformer: restartable(),
+    );
+    on<PagingInitEvent>(
+      (event, emit) async {
+        await _onEvent(event, emit);
+      },
+      transformer: restartable(),
+    );
+
     itemPositionsListener.itemPositions.addListener(onItemPositions);
     add(PagingInitEvent(
       offset: offset,
@@ -159,7 +177,9 @@ abstract class PagingBloc<T> extends Bloc<PagingEvent, PagingState<T>>
       if (!state.initialized ||
           state.map.isEmpty ||
           expectMinListRange(event.itemPositions.first - prefetchDistance,
-              event.itemPositions.last + prefetchDistance)) return;
+              event.itemPositions.last + prefetchDistance)) {
+        return;
+      }
 
       final expectStart = event.itemPositions.first - limit;
       final expectEnd = event.itemPositions.last + limit;
@@ -168,16 +188,12 @@ abstract class PagingBloc<T> extends Bloc<PagingEvent, PagingState<T>>
 
       var map = state.map;
       // If the diff range has only one direction and is greater than the limit
-      if (result.length > 1 &&
-          (result.first.item2 - result.first.item1) > limit) {
+      if (result.length > 1 && (result.first.$2 - result.first.$1) > limit) {
         map = await queryMap(event.itemPositions.length + limit,
             event.itemPositions.first - prefetchDistance);
       } else {
-        for (final tuple in result) {
-          map = {
-            ...map,
-            ...await queryMap(tuple.item2 - tuple.item1, tuple.item1)
-          };
+        for (final (start, end) in result) {
+          map = {...map, ...await queryMap(end - start, start)};
         }
 
         if (map.length > expectEnd - expectStart) {
@@ -227,20 +243,20 @@ abstract class PagingBloc<T> extends Bloc<PagingEvent, PagingState<T>>
     return state.map[start] != null && state.map[end] != null;
   }
 
-  List<Tuple2<int, int>> differenceMaxExpectRange(int _start, int _end) {
+  List<(int, int)> differenceMaxExpectRange(int _start, int _end) {
     final start = max(_start, 0);
     final end = min(_end, state.count);
     final loadedIndexes = state.map.keys.toList();
 
-    Tuple2<int, int>? before;
-    Tuple2<int, int>? after;
+    (int, int)? before;
+    (int, int)? after;
 
     if (start < loadedIndexes.first) {
-      before = Tuple2(start, min(loadedIndexes.first, end));
+      before = (start, min(loadedIndexes.first, end));
     }
 
     if (loadedIndexes.last < end) {
-      after = Tuple2(max(loadedIndexes.last, start), end);
+      after = (max(loadedIndexes.last, start), end);
     }
 
     return [

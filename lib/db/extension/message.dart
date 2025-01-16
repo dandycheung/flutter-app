@@ -10,6 +10,7 @@ import '../../widgets/message/send_message_dialog/attachment_extra.dart';
 import '../converter/media_status_type_converter.dart';
 import '../converter/message_status_type_converter.dart';
 import '../converter/millis_date_converter.dart';
+import '../dao/message_dao.dart';
 import '../mixin_database.dart';
 import 'message_category.dart';
 
@@ -62,6 +63,16 @@ extension MessageItemExtension on MessageItem {
         type.isLocation ||
         (type.isTranscript && mediaStatus == MediaStatus.done);
   }
+
+  bool get canRecall =>
+      [
+        MessageStatus.sent,
+        MessageStatus.delivered,
+        MessageStatus.read,
+      ].contains(status) &&
+      relationship == UserRelationship.me &&
+      type.canRecall &&
+      DateTime.now().isBefore(createdAt.add(const Duration(minutes: 60)));
 }
 
 extension QuoteMessageItemExtension on QuoteMessageItem {
@@ -87,8 +98,6 @@ extension QuoteMessageItemExtension on QuoteMessageItem {
         'thumb_url': thumbUrl,
         'media_url': mediaUrl,
         'media_duration': mediaDuration,
-        'quote_id': quoteId,
-        'quote_content': quoteContent,
         'asset_url': assetUrl,
         'asset_width': assetWidth,
         'asset_height': assetHeight,
@@ -133,8 +142,6 @@ QuoteMessageItem mapToQuoteMessage(Map<String, dynamic> map) {
     thumbUrl: map['thumb_url'] as String?,
     mediaUrl: map['media_url'] as String?,
     mediaDuration: map['media_duration'] as String?,
-    quoteId: map['quote_id'] as String?,
-    quoteContent: map['quote_content'] as String?,
     assetUrl: map['asset_url'] as String?,
     assetWidth: map['asset_width'] as int?,
     assetHeight: map['asset_height'] as int?,
@@ -183,6 +190,7 @@ extension SendingMessageCopy on SendingMessage {
     int? resendStatus,
     String? resendUserId,
     String? resendSessionId,
+    String? caption,
   }) =>
       SendingMessage(
         messageId: messageId ?? this.messageId,
@@ -217,5 +225,6 @@ extension SendingMessageCopy on SendingMessage {
         resendStatus: resendStatus ?? this.resendStatus,
         resendUserId: resendUserId ?? this.resendUserId,
         resendSessionId: resendSessionId ?? this.resendSessionId,
+        caption: caption ?? this.caption,
       );
 }

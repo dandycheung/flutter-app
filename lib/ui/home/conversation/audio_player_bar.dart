@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../../constants/resources.dart';
+import '../../../db/dao/conversation_dao.dart';
+import '../../../db/database_event_bus.dart';
 import '../../../db/mixin_database.dart';
 import '../../../utils/audio_message_player/audio_message_service.dart';
 import '../../../utils/extension/extension.dart';
@@ -10,13 +13,13 @@ import '../../../utils/hook.dart';
 import '../../../widgets/action_button.dart';
 import '../../../widgets/avatar_view/avatar_view.dart';
 import '../../../widgets/interactive_decorated_box.dart';
-import '../bloc/conversation_cubit.dart';
+import '../../provider/conversation_provider.dart';
 
-class AudioPlayerBar extends HookWidget {
+class AudioPlayerBar extends HookConsumerWidget {
   const AudioPlayerBar({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final message = useCurrentPlayingMessage();
 
     final state = useAudioMessagePlayerState();
@@ -28,15 +31,18 @@ class AudioPlayerBar extends HookWidget {
         }
         return context.database.conversationDao
             .conversationItem(message.conversationId)
-            .watchSingleOrNull();
+            .watchSingleOrNullWithStream(
+          eventStreams: [
+            DataBaseEventBus.instance
+                .watchUpdateConversationStream([message.conversationId]),
+          ],
+          duration: kSlowThrottleDuration,
+        );
       },
       keys: [message?.conversationId],
     ).data;
 
-    final selectedConversationId =
-        useBlocStateConverter<ConversationCubit, ConversationState?, String?>(
-      converter: (state) => state?.conversationId,
-    );
+    final selectedConversationId = ref.watch(currentConversationIdProvider);
 
     if (state == PlaybackState.idle ||
         state == PlaybackState.completed ||
@@ -49,7 +55,7 @@ class AudioPlayerBar extends HookWidget {
         if (conversationItem == null) {
           return;
         }
-        ConversationCubit.selectConversation(
+        ConversationStateNotifier.selectConversation(
           context,
           conversationItem.conversationId,
           conversation: conversationItem,
@@ -115,11 +121,11 @@ class AudioPlayerBar extends HookWidget {
   }
 }
 
-class _PlaybackSpeedButton extends HookWidget {
+class _PlaybackSpeedButton extends HookConsumerWidget {
   const _PlaybackSpeedButton();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final speed = useAudioPlayerSpeed();
     return ActionButton(
       child: Center(
@@ -158,10 +164,12 @@ class _Icon extends StatelessWidget {
           children: [
             Align(
               alignment: Alignment.centerLeft,
-              child: ConversationAvatarWidget(
-                conversation: conversation,
-                size: 32,
-              ),
+              child: conversation == null
+                  ? const SizedBox.square(dimension: 32)
+                  : ConversationAvatarWidget(
+                      conversation: conversation,
+                      size: 32,
+                    ),
             ),
             Align(
               alignment: Alignment.bottomRight,
@@ -178,13 +186,13 @@ class _Icon extends StatelessWidget {
       );
 }
 
-class _ProgressBar extends HookWidget {
+class _ProgressBar extends HookConsumerWidget {
   const _ProgressBar({required this.message});
 
   final MessageItem? message;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final position = useAudioPlayerPosition();
 
     final duration = useMemoized<int>(() {

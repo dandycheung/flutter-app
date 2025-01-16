@@ -3,13 +3,13 @@ import 'dart:io';
 
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:rxdart/rxdart.dart';
-import 'package:tuple/tuple.dart';
 
 import '../../account/account_server.dart';
 import '../../db/mixin_database.dart';
 import '../../enum/media_status.dart';
 import '../extension/extension.dart';
 import '../hook.dart';
+import '../system/audio_session.dart';
 import 'audio_message_player.dart';
 
 export 'audio_message_player.dart';
@@ -29,33 +29,43 @@ class AudioMessagePlayService {
 
   Duration get currentPosition => _player.currentPosition();
 
+  final _subscriptions = <StreamSubscription>[];
+
   void initListen() {
-    _player.playbackStream.asyncMap((playbackState) async {
-      if (!playbackState.isCompleted) return;
+    _subscriptions.add(
+      _player.playbackStream.asyncMap((playbackState) async {
+        if (!playbackState.isCompleted) return;
 
-      final media = _player.current;
+        final media = _player.current;
 
-      if (_isMediaList) return;
-
-      if (media == null) return;
-
-      final currentMessage = media.messageItem;
-      final message =
-          await _accountServer.database.messageDao.findNextAudioMessageItem(
-        conversationId: currentMessage.conversationId,
-        messageId: currentMessage.messageId,
-        createdAt: currentMessage.createdAt,
-      );
-      if (message == null) return;
-      playAudioMessage(message, resetPlaySpeed: false);
-    }).listen((event) {});
+        if (_isMediaList || media == null) {
+          await AudioSession.instance.deactivate();
+          return;
+        }
+        final currentMessage = media.messageItem;
+        final message =
+            await _accountServer.database.messageDao.findNextAudioMessageItem(
+          conversationId: currentMessage.conversationId,
+          messageId: currentMessage.messageId,
+        );
+        if (message == null) {
+          await AudioSession.instance.deactivate();
+          return;
+        }
+        await playAudioMessage(message, resetPlaySpeed: false);
+      }).listen((event) {}),
+    );
   }
 
   void dispose() {
     _player.dispose();
+    _subscriptions
+      ..forEach((e) => e.cancel())
+      ..clear();
   }
 
-  void playAudioMessage(MessageItem message, {bool resetPlaySpeed = true}) {
+  Future<void> playAudioMessage(MessageItem message,
+      {bool resetPlaySpeed = true}) async {
     _player.stop();
     _isMediaList = false;
 
@@ -71,6 +81,8 @@ class AudioMessagePlayService {
           .updateMediaStatus(message.messageId, MediaStatus.read));
     }
 
+    await AudioSession.instance.activePlayback();
+
     _player.play([
       MessageMedia(
         message,
@@ -79,13 +91,13 @@ class AudioMessagePlayService {
     ], resetPlaySpeed: resetPlaySpeed);
   }
 
-  void playMessages(
+  Future<void> playMessages(
     List<MessageItem> messages,
     String Function(MessageItem) convertMessageAbsolutePath,
-  ) {
+  ) async {
     _player.stop();
     _isMediaList = true;
-
+    await AudioSession.instance.activePlayback();
     _player.play(messages
         .map(
           (e) => MessageMedia(
@@ -101,11 +113,13 @@ class AudioMessagePlayService {
     _player.stop();
   }
 
-  void pause() {
+  Future<void> pause() async {
     _player.pause();
+    await AudioSession.instance.deactivate();
   }
 
-  void resume() {
+  Future<void> resume() async {
+    await AudioSession.instance.activePlayback();
     _player.resume();
   }
 
@@ -122,14 +136,14 @@ bool useAudioMessagePlaying(String messageId, {bool isMediaList = false}) {
       final ams = context.audioMessageService;
 
       return CombineLatestStream.combine2<MessageMedia?, bool,
-          Tuple2<MessageMedia?, bool>>(
+          (MessageMedia?, bool)>(
         ams._player.currentStream,
         ams._player.playbackStream.map((e) => e.isPlaying).distinct(),
-        Tuple2.new,
+        (a, b) => (a, b),
       ).map((event) {
-        if (!event.item2) return false;
+        if (!event.$2) return false;
 
-        final message = event.item1?.messageItem;
+        final message = event.$1?.messageItem;
 
         return message?.messageId == messageId &&
             isMediaList == ams._isMediaList;

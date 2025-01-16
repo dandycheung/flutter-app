@@ -5,10 +5,10 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:flutter_portal/flutter_portal.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart' hide Provider;
 import 'package:provider/provider.dart';
 
 import 'interactive_decorated_box.dart';
-import 'menu.dart';
 
 class _HoverOverlayForceHiddenTool {
   _HoverOverlayForceHiddenTool(this.hidden, this.duration);
@@ -30,13 +30,13 @@ class _HoverOverlayForceHiddenTool {
 typedef PortalBuilder<T> = Widget Function(BuildContext context, T value,
     Widget Function(Widget child) portalHoverWrapper, Widget? child);
 
-class HoverOverlay extends HookWidget {
+class HoverOverlay extends HookConsumerWidget {
   const HoverOverlay({
-    super.key,
     required this.closeDuration,
     required this.child,
     required this.portal,
     required this.duration,
+    super.key,
     this.anchor = const Filled(),
     this.portalCandidateLabels = const [PortalLabel.main],
     this.closeWaitDuration = Duration.zero,
@@ -63,7 +63,7 @@ class HoverOverlay extends HookWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final cancelableRef = useRef<CancelableOperation<bool>?>(null);
 
     final forceHidden = useState<bool>(false);
@@ -99,7 +99,9 @@ class HoverOverlay extends HookWidget {
     Future<void> onChildHovering(_) async {
       if (cancelableRef.value != null &&
           !cancelableRef.value!.isCanceled &&
-          !cancelableRef.value!.isCompleted) return;
+          !cancelableRef.value!.isCompleted) {
+        return;
+      }
 
       if (delayDuration != null) {
         cancelableRef.value = CancelableOperation.fromFuture(
@@ -129,13 +131,7 @@ class HoverOverlay extends HookWidget {
                 tapped.value = true;
               }
             },
-            child: NotificationListener<SubMenuClickedByTouchNotification>(
-              child: child,
-              onNotification: (notification) {
-                tapped.value = !tapped.value;
-                return true;
-              },
-            ),
+            child: child,
           ),
         );
 

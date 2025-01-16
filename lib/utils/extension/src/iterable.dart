@@ -3,13 +3,7 @@ part of '../extension.dart';
 extension IterableExtension<T> on Iterable<T> {
   T? firstWhereOrNull(bool Function(T? element) test) =>
       cast<T?>().firstWhere(test, orElse: () => null);
-}
 
-extension IterableExtenstionNull<T> on Iterable<T?> {
-  Iterable<T> whereNotNull() => where((e) => e != null).cast<T>();
-}
-
-extension ListExtension<T> on List<T> {
   List<T> joinList(T separator) {
     final iterator = this.iterator;
     if (!iterator.moveNext()) return [];
@@ -29,7 +23,9 @@ extension ListExtension<T> on List<T> {
 
     return buffer;
   }
+}
 
+extension ListExtension<T> on List<T> {
   T? getOrNull(int index) {
     if (index < 0) return null;
     if (isEmpty) return null;
@@ -72,5 +68,16 @@ extension ListExtension<T> on List<T> {
       i = end;
     }
     return result;
+  }
+}
+
+Future<void> futureForEachIndexed<T>(
+  Iterable<T> iterable,
+  FutureOr<void> Function(int index, T element) action,
+) async {
+  var index = 0;
+  for (final element in iterable) {
+    await action(index, element);
+    index++;
   }
 }

@@ -1,11 +1,12 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:rxdart/rxdart.dart';
-import 'package:tuple/tuple.dart';
 
 import '../../constants/resources.dart';
 import '../../db/dao/sticker_album_dao.dart';
+import '../../db/database_event_bus.dart';
 import '../../db/mixin_database.dart';
 import '../../utils/extension/extension.dart';
 import '../../utils/hook.dart';
@@ -44,10 +45,10 @@ Future<bool> showStickerStorePageDialog(
       constraints: BoxConstraints.loose(const Size(480, 600)),
       child: Navigator(
         key: navigatorKey,
+        onDidRemovePage: (page) {},
         pages: const [
           MaterialPage(child: _StickerStorePage()),
         ],
-        onPopPage: (_, __) => true,
       ),
     ),
   );
@@ -73,9 +74,15 @@ Future<void> showStickerPageDialog(
         ),
         child: HookBuilder(builder: (context) {
           final album = useMemoizedStream(() => context
-                  .database.stickerRelationshipDao
-                  .stickerSystemAlbum(stickerId)
-                  .watchSingleOrNullThrottle(kSlowThrottleDuration)).data ??
+                      .database.stickerRelationshipDao
+                      .stickerSystemAlbum(stickerId)
+                      .watchSingleOrNullWithStream(
+                    eventStreams: [
+                      DataBaseEventBus.instance
+                          .watchUpdateStickerStream(stickerIds: [stickerId])
+                    ],
+                    duration: kSlowThrottleDuration,
+                  )).data ??
               a;
 
           useEffect(() {
@@ -115,11 +122,11 @@ Future<void> showStickerPageDialog(
   );
 }
 
-class _StickerStorePage extends HookWidget {
+class _StickerStorePage extends HookConsumerWidget {
   const _StickerStorePage();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     useEffect(() {
       context.accountServer.refreshSticker(force: true);
     }, []);
@@ -156,41 +163,45 @@ class _StickerStorePage extends HookWidget {
   }
 }
 
-typedef _StickerAlbumItem = Tuple2<StickerAlbum, List<Sticker>>;
-
-class _List extends HookWidget {
+class _List extends HookConsumerWidget {
   const _List();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final albums = useMemoizedStream(() => Rx.combineLatest2<List<StickerAlbum>,
-                List<Sticker>, List<_StickerAlbumItem>>(
-              context.database.stickerAlbumDao
-                  .systemAlbums()
-                  .watchThrottle(kSlowThrottleDuration),
-              context.database.stickerDao
-                  .systemStickers()
-                  .watchThrottle(kSlowThrottleDuration),
-              (albums, stickers) => albums.map(
-                (e) {
-                  final _stickers = stickers
-                      .where((element) => element.albumId == e.albumId)
-                      .toList();
-                  return _StickerAlbumItem(e, _stickers);
-                },
-              ).toList(),
+                List<Sticker>, List<(StickerAlbum, List<Sticker>)>>(
+              context.database.stickerAlbumDao.systemAlbums().watchWithStream(
+                eventStreams: [DataBaseEventBus.instance.updateStickerStream],
+                duration: kSlowThrottleDuration,
+              ),
+              context.database.stickerDao.systemStickers().watchWithStream(
+                eventStreams: [DataBaseEventBus.instance.updateStickerStream],
+                duration: kSlowThrottleDuration,
+              ),
+              (albums, stickers) => albums
+                  .map(
+                    (e) => (
+                      e,
+                      stickers
+                          .where((element) => element.albumId == e.albumId)
+                          .toList()
+                    ),
+                  )
+                  .toList(),
             )).data ??
         [];
     return ListView.builder(
       padding: const EdgeInsets.symmetric(vertical: 16),
       itemCount: albums.length,
-      itemBuilder: (BuildContext context, int index) =>
-          _Item(albums[index].item1, albums[index].item2),
+      itemBuilder: (BuildContext context, int index) {
+        final (album, stickers) = albums[index];
+        return _Item(album, stickers);
+      },
     );
   }
 }
 
-class _Item extends HookWidget {
+class _Item extends HookConsumerWidget {
   const _Item(
     this.album,
     this.stickers,
@@ -200,7 +211,7 @@ class _Item extends HookWidget {
   final List<Sticker> stickers;
 
   @override
-  Widget build(BuildContext context) => SizedBox(
+  Widget build(BuildContext context, WidgetRef ref) => SizedBox(
         height: 104,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -269,16 +280,18 @@ class _Item extends HookWidget {
       );
 }
 
-class _StickerAlbumManagePage extends HookWidget {
+class _StickerAlbumManagePage extends HookConsumerWidget {
   const _StickerAlbumManagePage();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final controller = useScrollController();
 
-    final albums = useMemoizedStream(() => context.database.stickerAlbumDao
-        .systemAddedAlbums()
-        .watchThrottle(kSlowThrottleDuration)).data;
+    final albums = useMemoizedStream(() =>
+        context.database.stickerAlbumDao.systemAddedAlbums().watchWithStream(
+          eventStreams: [DataBaseEventBus.instance.updateStickerStream],
+          duration: kSlowThrottleDuration,
+        )).data;
     final list = useState(albums ?? []);
     useEffect(() {
       list.value = albums ?? [];
@@ -369,7 +382,7 @@ class _StickerAlbumManagePage extends HookWidget {
   }
 }
 
-class _StickerPage extends HookWidget {
+class _StickerPage extends HookConsumerWidget {
   const _StickerPage({
     required this.stickerId,
     this.albumId,
@@ -379,7 +392,7 @@ class _StickerPage extends HookWidget {
   final String? albumId;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final sticker = useState<Sticker?>(null);
     useEffect(() {
       Future<void> effect() async {
@@ -398,7 +411,14 @@ class _StickerPage extends HookWidget {
         if (albumId == null) return Stream.value(null);
         return context.database.stickerAlbumDao
             .album(albumId!)
-            .watchSingleThrottle(kDefaultThrottleDuration);
+            .watchSingleWithStream(
+          eventStreams: [
+            DataBaseEventBus.instance.watchUpdateStickerStream(
+              albumIds: [albumId!],
+            )
+          ],
+          duration: kDefaultThrottleDuration,
+        );
       },
       keys: [albumId],
     ).data;
@@ -407,7 +427,13 @@ class _StickerPage extends HookWidget {
           if (album == null) return Stream.value(<Sticker>[]);
           return context.database.stickerDao
               .stickerByAlbumId(album.albumId)
-              .watchThrottle(kDefaultThrottleDuration);
+              .watchWithStream(
+            eventStreams: [
+              DataBaseEventBus.instance
+                  .watchUpdateStickerStream(albumIds: [album.albumId])
+            ],
+            duration: kDefaultThrottleDuration,
+          );
         }, keys: [album?.albumId]).data ??
         [];
 
@@ -493,7 +519,7 @@ class _StickerPage extends HookWidget {
               if (album != null && stickers.isNotEmpty)
                 TabBar(
                   isScrollable: true,
-                  overlayColor: MaterialStateProperty.all(Colors.transparent),
+                  overlayColor: WidgetStateProperty.all(Colors.transparent),
                   indicator: BoxDecoration(
                     color: context.dynamicColor(
                       const Color.fromRGBO(229, 231, 235, 1),

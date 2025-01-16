@@ -1,19 +1,20 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../utils/app_lifecycle.dart';
 import '../utils/logger.dart';
 
-class FocusHelper extends HookWidget {
+class FocusHelper extends HookConsumerWidget {
   const FocusHelper({
-    super.key,
     required this.child,
+    super.key,
   });
 
   final Widget child;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     useDesktopLifecycleAutoFocus();
     useEditableTextAutoCleanSelection();
 
@@ -71,6 +72,7 @@ void useEditableTextAutoCleanSelection() {
       if (!isAppActive) return;
 
       final primaryFocus = FocusManager.instance.primaryFocus;
+
       if (previousFocusRef.value == primaryFocus) return;
 
       _cleanSelection(previousFocusRef.value?.context);

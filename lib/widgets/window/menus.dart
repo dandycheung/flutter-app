@@ -1,20 +1,24 @@
 import 'dart:io';
 
-import 'package:equatable/equatable.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:window_manager/window_manager.dart';
 
-import '../../account/account_server.dart';
-import '../../ui/home/bloc/multi_auth_cubit.dart';
-import '../../ui/home/bloc/slide_category_cubit.dart';
+import '../../account/security_key_value.dart';
 import '../../ui/home/conversation/conversation_hotkey.dart';
+import '../../ui/provider/account_server_provider.dart';
+import '../../ui/provider/slide_category_provider.dart';
+import '../../utils/device_transfer/device_transfer_dialog.dart';
+import '../../utils/event_bus.dart';
 import '../../utils/extension/extension.dart';
 import '../../utils/hook.dart';
+import '../../utils/rivepod.dart';
 import '../../utils/uri_utils.dart';
 import '../actions/actions.dart';
+import '../auth.dart';
 
 abstract class ConversationMenuHandle {
   Stream<bool> get isMuted;
@@ -36,41 +40,36 @@ abstract class ConversationMenuHandle {
   void delete();
 }
 
-class MacMenuBarCubitState with EquatableMixin {
-  const MacMenuBarCubitState({
-    this.conversationMenuHandle,
-  });
-
-  final ConversationMenuHandle? conversationMenuHandle;
-
-  @override
-  List<Object?> get props => [conversationMenuHandle];
-}
-
-class MacMenuBarCubit extends Cubit<MacMenuBarCubitState> {
-  MacMenuBarCubit() : super(const MacMenuBarCubitState());
+class MacMenuBarStateNotifier
+    extends DistinctStateNotifier<ConversationMenuHandle?> {
+  MacMenuBarStateNotifier(super.state);
 
   void attach(ConversationMenuHandle handle) {
-    emit(MacMenuBarCubitState(conversationMenuHandle: handle));
+    if (!Platform.isMacOS) return;
+    Future(() => state = handle);
   }
 
   void unAttach(ConversationMenuHandle handle) {
-    if (state.conversationMenuHandle == handle) {
-      emit(const MacMenuBarCubitState());
-    }
+    if (!Platform.isMacOS) return;
+    if (state != handle) return;
+    state = null;
   }
 }
 
-class MacosMenuBar extends StatelessWidget {
+final macMenuBarProvider =
+    StateNotifierProvider<MacMenuBarStateNotifier, ConversationMenuHandle?>(
+        (ref) => MacMenuBarStateNotifier(null));
+
+class MacosMenuBar extends HookConsumerWidget {
   const MacosMenuBar({
-    super.key,
     required this.child,
+    super.key,
   });
 
   final Widget child;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     if (!Platform.isMacOS) {
       return child;
     }
@@ -78,28 +77,17 @@ class MacosMenuBar extends StatelessWidget {
   }
 }
 
-class _Menus extends HookWidget {
+class _Menus extends HookConsumerWidget {
   const _Menus({required this.child});
 
   final Widget child;
 
   @override
-  Widget build(BuildContext context) {
-    final authAvailable =
-        useBlocState<MultiAuthCubit, MultiAuthState>().current != null;
-    AccountServer? accountServer;
-    try {
-      accountServer = context.read<AccountServer?>();
-    } catch (_) {}
-    final signed = authAvailable && accountServer != null;
+  Widget build(BuildContext context, WidgetRef ref) {
+    final signed =
+        ref.watch(accountServerProvider.select((value) => value.hasValue));
 
-    final menuCubit = useBloc<MacMenuBarCubit>(MacMenuBarCubit.new);
-
-    final handle = useBlocStateConverter<MacMenuBarCubit, MacMenuBarCubitState,
-        ConversationMenuHandle?>(
-      converter: (state) => state.conversationMenuHandle,
-      bloc: menuCubit,
-    );
+    final handle = ref.watch(macMenuBarProvider);
 
     final muted = useMemoizedStream(
           () => handle?.isMuted ?? const Stream<bool>.empty(),
@@ -111,6 +99,12 @@ class _Menus extends HookWidget {
           () => handle?.isPinned ?? const Stream<bool>.empty(),
           keys: [handle],
         ).data ??
+        false;
+
+    final hasPasscode = useMemoizedStream(signed
+                ? SecurityKeyValue.instance.watchHasPasscode
+                : () => Stream.value(false))
+            .data ??
         false;
 
     PlatformMenu buildConversationMenu() => PlatformMenu(
@@ -173,10 +167,23 @@ class _Menus extends HookWidget {
               onSelected: signed
                   ? () {
                       windowManager.show();
-                      context
-                          .read<SlideCategoryCubit>()
+                      ref
+                          .read(slideCategoryStateProvider.notifier)
                           .select(SlideCategoryType.setting);
                     }
+                  : null,
+            ),
+          ]),
+          PlatformMenuItemGroup(members: [
+            PlatformMenuItem(
+              label: context.l10n.lock,
+              shortcut: const SingleActivator(
+                LogicalKeyboardKey.keyL,
+                meta: true,
+                shift: true,
+              ),
+              onSelected: hasPasscode
+                  ? () => EventBus.instance.fire(LockEvent.lock)
                   : null,
             ),
           ]),
@@ -258,6 +265,17 @@ class _Menus extends HookWidget {
                     }
                   : null,
             ),
+            if (kDebugMode)
+              PlatformMenuItemGroup(members: [
+                PlatformMenuItem(
+                  label: 'chat backup and restore',
+                  onSelected: signed
+                      ? () {
+                          showDeviceTransferDialog(context);
+                        }
+                      : null,
+                )
+              ]),
             PlatformMenuItem(
               label: context.l10n.createCircle,
               onSelected: signed
@@ -374,6 +392,6 @@ class _Menus extends HookWidget {
       WidgetsBinding.instance.platformMenuDelegate.setMenus(menus);
     }, [menus]);
 
-    return BlocProvider.value(value: menuCubit, child: child);
+    return child;
   }
 }

@@ -22,6 +22,12 @@ jobs:
         with:
           channel: 'stable' # 'master', 'beta', 'dev' or 'stable'
 
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: 'stable' # 'stable' or 'nightly'
+          override: true
+          components: rustfmt, clippy
+
       # flutter build need ninja.
       # https://github.com/subosito/flutter-action/issues/49
       - name: Patch for linux build
@@ -32,24 +38,32 @@ jobs:
           sudo apt-get install libsdl2-dev
           sudo apt-get install webkit2gtk-4.1
           sudo apt-get install libopus-dev libogg-dev
+          sudo apt-get install libcurl4-openssl-dev
           flutter doctor
 
       - name: Install dependencies
         run: flutter pub get
 
-      # verify the use of 'dart format' on each commit.
+      - name: Generator ENV
+        run: |
+          tee .env &>/dev/null << EOF
+          SENTRY_DSN=${{ secrets.SENTRY_DSN }}
+          EOF
+
+      - name: Run Build Runner
+        run: dart run build_runner build --delete-conflicting-outputs
+
       - name: Verify formatting
-        run: flutter format --set-exit-if-changed .
+        run: dart format --set-exit-if-changed .
 
-      # Consider passing '--fatal-infos' for slightly stricter analysis.
       - name: Analyze project source
-        run: flutter analyze
-
-      # dart_code_metrics
-      - name: Run dart_code_metrics
-        run: flutter pub run dart_code_metrics:metrics analyze lib
+        run: dart analyze --fatal-infos
 
       - run: flutter config --enable-linux-desktop
+
+      # setup webcrypto for unit test
+      - run: dart run webcrypto:setup
+
       # Your project will need to have tests in test/ and a dependency on
       # package:test for this step to succeed. Note that Flutter projects will
       # want to change this to 'flutter test'.

@@ -5,13 +5,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:flutter_svg/svg.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart' hide Provider;
 import 'package:provider/provider.dart';
 
 import '../../../blaze/vo/transcript_minimal.dart';
 import '../../../constants/resources.dart';
+import '../../../db/database_event_bus.dart';
 import '../../../db/mixin_database.dart';
 import '../../../ui/home/bloc/blink_cubit.dart';
-import '../../../ui/home/bloc/message_selection_cubit.dart';
 import '../../../ui/home/chat/chat_page.dart';
 import '../../../utils/audio_message_player/audio_message_service.dart';
 import '../../../utils/extension/extension.dart';
@@ -35,11 +36,11 @@ class TranscriptMessagesWatcher {
   final Stream<List<MessageItem>> Function() watchMessages;
 }
 
-class TranscriptMessageWidget extends HookWidget {
+class TranscriptMessageWidget extends HookConsumerWidget {
   const TranscriptMessageWidget({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final content =
         useMessageConverter(converter: (state) => state.content ?? '');
     final transcriptMinimals = useMemoized<List<TranscriptMinimal>?>(() {
@@ -103,6 +104,7 @@ class TranscriptMessageWidget extends HookWidget {
             await showMixinDialog(
                 context: context,
                 padding: const EdgeInsets.symmetric(vertical: 80),
+                backgroundColor: context.theme.chatBackground,
                 child: TranscriptPage(
                   transcriptMessage: message,
                   vlcService: context.audioMessageService,
@@ -205,11 +207,11 @@ class TranscriptMessageWidget extends HookWidget {
   }
 }
 
-class TranscriptPage extends HookWidget {
+class TranscriptPage extends HookConsumerWidget {
   const TranscriptPage({
-    super.key,
     required this.vlcService,
     required this.transcriptMessage,
+    super.key,
   });
 
   final AudioMessagePlayService vlcService;
@@ -220,14 +222,22 @@ class TranscriptPage extends HookWidget {
       ?.transcriptMessage;
 
   @override
-  Widget build(BuildContext context) {
-    Stream<List<MessageItem>> watchMessages() => context
-        .database.transcriptMessageDao
-        .transactionMessageItem(transcriptMessage.messageId)
-        .watchThrottle(kDefaultThrottleDuration)
-        .map((list) => list
-            .map((transcriptMessageItem) => transcriptMessageItem.messageItem)
-            .toList());
+  Widget build(BuildContext context, WidgetRef ref) {
+    Stream<List<MessageItem>> watchMessages() =>
+        context.database.transcriptMessageDao
+            .transactionMessageItem(transcriptMessage.messageId)
+            .watchWithStream(
+          eventStreams: [
+            DataBaseEventBus.instance.watchUpdateTranscriptMessageStream(
+                transcriptIds: [transcriptMessage.messageId]),
+            DataBaseEventBus.instance.updateAssetStream,
+            DataBaseEventBus.instance.updateStickerStream,
+          ],
+          duration: kDefaultThrottleDuration,
+        ).map((list) => list
+                .map((transcriptMessageItem) =>
+                    transcriptMessageItem.messageItem)
+                .toList());
 
     final list = useMemoizedStream(watchMessages).data ?? <MessageItem>[];
 
@@ -240,7 +250,7 @@ class TranscriptPage extends HookWidget {
     final blinkCubit = useBloc(
       () => BlinkCubit(
         tickerProvider,
-        context.theme.accent.withOpacity(0.5),
+        context.theme.accent.withValues(alpha: 0.5),
       ),
     );
 
@@ -248,81 +258,77 @@ class TranscriptPage extends HookWidget {
     final listKey =
         useMemoized(() => GlobalKey(debugLabel: 'transcript_list_key'));
 
-    return ColoredBox(
-      color: context.theme.chatBackground,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(
-          maxWidth: 600,
-          minWidth: 600,
-          minHeight: 800,
-        ),
-        child: MultiProvider(
-          providers: [
-            BlocProvider.value(value: searchConversationKeywordCubit),
-            BlocProvider.value(value: blinkCubit),
-            Provider.value(value: vlcService),
-            Provider(
-              create: (_) => AudioMessagesPlayAgent(
-                  list,
-                  (m) => context.accountServer
-                      .convertMessageAbsolutePath(m, true)),
-            ),
-            Provider.value(value: TranscriptMessagesWatcher(watchMessages)),
-            BlocProvider(create: (_) => MessageSelectionCubit()),
-          ],
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(right: 16, left: 16, top: 16),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Expanded(
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: ActionButton(
-                          name: Resources.assetsImagesIcCloseSvg,
-                          color: context.theme.icon,
-                          onTap: () => Navigator.pop(context),
-                        ),
-                      ),
-                    ),
-                    Expanded(
-                      child: Align(
-                        child: Text(
-                          context.l10n.transcript,
-                          style: TextStyle(
-                            color: context.theme.text,
-                            fontSize: 16,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const Expanded(child: SizedBox()),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: MessageDayTimeViewportWidget.singleList(
-                  listKey: listKey,
-                  scrollController: scrollController,
-                  child: ListView.builder(
-                    controller: scrollController,
-                    key: listKey,
-                    padding: const EdgeInsets.only(bottom: 16),
-                    itemBuilder: (BuildContext context, int index) =>
-                        MessageItemWidget(
-                      prev: list.getOrNull(index - 1),
-                      message: list[index],
-                      next: list.getOrNull(index + 1),
-                      isTranscriptPage: true,
-                    ),
-                    itemCount: list.length,
-                  ),
-                ),
-              ),
-            ],
+    return ConstrainedBox(
+      constraints: const BoxConstraints(
+        maxWidth: 600,
+        minWidth: 600,
+        minHeight: 800,
+      ),
+      child: MultiProvider(
+        providers: [
+          BlocProvider.value(value: searchConversationKeywordCubit),
+          BlocProvider.value(value: blinkCubit),
+          Provider.value(value: vlcService),
+          Provider(
+            create: (_) => AudioMessagesPlayAgent(
+                list,
+                (m) =>
+                    context.accountServer.convertMessageAbsolutePath(m, true)),
           ),
+          Provider.value(value: TranscriptMessagesWatcher(watchMessages)),
+        ],
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(right: 16, left: 16, top: 16),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: ActionButton(
+                        name: Resources.assetsImagesIcCloseSvg,
+                        color: context.theme.icon,
+                        onTap: () => Navigator.pop(context),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: Align(
+                      child: Text(
+                        context.l10n.transcript,
+                        style: TextStyle(
+                          color: context.theme.text,
+                          fontSize: 16,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const Expanded(child: SizedBox()),
+                ],
+              ),
+            ),
+            Expanded(
+              child: MessageDayTimeViewportWidget.singleList(
+                listKey: listKey,
+                scrollController: scrollController,
+                child: ListView.builder(
+                  controller: scrollController,
+                  key: listKey,
+                  padding: const EdgeInsets.only(bottom: 16),
+                  itemBuilder: (BuildContext context, int index) =>
+                      MessageItemWidget(
+                    prev: list.getOrNull(index - 1),
+                    message: list[index],
+                    next: list.getOrNull(index + 1),
+                    isTranscriptPage: true,
+                  ),
+                  itemCount: list.length,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );

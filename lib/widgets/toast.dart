@@ -1,7 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:mixin_bot_sdk_dart/mixin_bot_sdk_dart.dart';
-
 import 'package:overlay_support/overlay_support.dart';
 
 import '../constants/resources.dart';
@@ -23,9 +24,11 @@ class Toast {
   static void createView({
     required WidgetBuilder builder,
     Duration? duration = Toast.shortDuration,
+    BuildContext? context,
   }) {
     dismiss();
     _entry = showOverlay(
+      context: context,
       (context, progress) => Opacity(
         opacity: progress,
         child: builder(context),
@@ -42,58 +45,64 @@ class Toast {
 
 class ToastWidget extends StatelessWidget {
   const ToastWidget({
+    required this.text,
     super.key,
     this.barrierColor = const Color(0x80000000),
     this.icon,
-    required this.text,
+    this.ignoring = true,
   });
 
   final Color barrierColor;
   final Widget? icon;
   final String text;
+  final bool ignoring;
 
   @override
-  Widget build(BuildContext context) => Material(
-        color: Colors.transparent,
-        child: Container(
-          color: barrierColor,
-          alignment: Alignment.center,
+  Widget build(BuildContext context) => IgnorePointer(
+        ignoring: ignoring,
+        child: Material(
+          color: Colors.transparent,
           child: Container(
-            constraints: const BoxConstraints(
-              minWidth: 130,
-            ),
-            decoration: const BoxDecoration(
-              borderRadius: BorderRadius.all(Radius.circular(8)),
-              color: Color.fromRGBO(62, 65, 72, 0.7),
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(height: 20),
-                if (icon != null)
-                  SizedBox(
-                    height: 30,
-                    width: 30,
-                    child: icon,
+            color: barrierColor,
+            alignment: Alignment.center,
+            child: Container(
+              constraints: const BoxConstraints(
+                minWidth: 130,
+              ),
+              decoration: const BoxDecoration(
+                borderRadius: BorderRadius.all(Radius.circular(8)),
+                color: Color.fromRGBO(62, 65, 72, 0.7),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(height: 20),
+                  if (icon != null)
+                    SizedBox(
+                      height: 30,
+                      width: 30,
+                      child: icon,
+                    ),
+                  if (icon != null) const SizedBox(height: 12),
+                  Text(
+                    text,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                    ),
                   ),
-                if (icon != null) const SizedBox(height: 12),
-                Text(
-                  text,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                  ),
-                ),
-                const SizedBox(height: 20),
-              ],
+                  const SizedBox(height: 20),
+                ],
+              ),
             ),
           ),
         ),
       );
 }
 
-void showToastSuccessful() => Toast.createView(
+void showToastSuccessful({BuildContext? context}) => Toast.createView(
+      context: context,
       builder: (context) => ToastWidget(
         barrierColor: Colors.transparent,
         icon: const _Successful(),
@@ -133,7 +142,9 @@ class ToastError extends Error {
   final String Function(BuildContext)? messageBuilder;
 }
 
-void showToastFailed(Object? error) => Toast.createView(
+void showToastFailed(Object? error, {BuildContext? context}) =>
+    Toast.createView(
+      context: context,
       builder: (context) => ToastWidget(
         barrierColor: Colors.transparent,
         icon: const _Failed(),
@@ -141,17 +152,20 @@ void showToastFailed(Object? error) => Toast.createView(
       ),
     );
 
-void showToast(String message) => Toast.createView(
+void showToast(String message, {BuildContext? context}) => Toast.createView(
+      context: context,
       builder: (context) => ToastWidget(
         barrierColor: Colors.transparent,
         text: message,
       ),
     );
 
-void showToastLoading() => Toast.createView(
+void showToastLoading({BuildContext? context}) => Toast.createView(
+      context: context,
       builder: (context) => ToastWidget(
         icon: const _Loading(),
         text: context.l10n.loading,
+        ignoring: false,
       ),
       duration: null,
     );
@@ -186,6 +200,20 @@ Future<bool> runFutureWithToast(Future<dynamic> future) async {
   showToastLoading();
   try {
     await future;
+  } catch (error, s) {
+    e("runFutureWithToast's error: $error, $s");
+    showToastFailed(error);
+    return false;
+  }
+  showToastSuccessful();
+
+  return true;
+}
+
+Future<bool> runWithToast(FutureOr<void> Function() function) async {
+  showToastLoading();
+  try {
+    await function();
   } catch (error, s) {
     e("runFutureWithToast's error: $error, $s");
     showToastFailed(error);

@@ -3,10 +3,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../constants/resources.dart';
 import '../../ui/home/bloc/blink_cubit.dart';
-import '../../ui/home/bloc/conversation_cubit.dart';
+import '../../ui/provider/conversation_provider.dart';
 import '../../utils/extension/extension.dart';
 import '../action_button.dart';
 import '../toast.dart';
@@ -25,10 +26,10 @@ extension BubbleColor on BuildContext {
       : dynamicColor(lightOtherBubble, darkColor: darkOtherBubble);
 }
 
-class MessageBubble extends HookWidget {
+class MessageBubble extends HookConsumerWidget {
   const MessageBubble({
-    super.key,
     required this.child,
+    super.key,
     this.showBubble = true,
     this.includeNip = false,
     this.clip = false,
@@ -46,7 +47,7 @@ class MessageBubble extends HookWidget {
   final bool? forceIsCurrentUserColor;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final showNip = useShowNip();
     final isCurrentUser = useIsCurrentUser();
     final isPinnedPage = useIsPinnedPage();
@@ -63,10 +64,12 @@ class MessageBubble extends HookWidget {
     final bubbleColor =
         context.messageBubbleColor(forceIsCurrentUserColor ?? isCurrentUser);
 
+    final messageType = useMessageConverter(converter: (state) => state.type);
+
     var _child = child;
 
     if (!includeNip) {
-      _child = _MessageBubbleNipPadding(
+      _child = MessageBubbleNipPadding(
         currentUser: isCurrentUser,
         child: child,
       );
@@ -78,26 +81,33 @@ class MessageBubble extends HookWidget {
     );
 
     if (hasQuoteMessage) {
+      final constraintQuoteWidthToMessage =
+          messageType.isVideo || messageType.isImage || messageType.isLive;
       _child = IntrinsicWidth(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _MessageBubbleNipPadding(
-              currentUser: isCurrentUser,
-              child: HookBuilder(builder: (context) {
-                final quoteContent = useMessageConverter(
-                    converter: (state) => state.quoteContent);
-                final messageId =
-                    useMessageConverter(converter: (state) => state.messageId);
+            SizedBox(
+              // constraint width to 0, the ancestor IntrinsicWidth will relayout
+              // and get the correct width.
+              width: constraintQuoteWidthToMessage ? 0 : null,
+              child: MessageBubbleNipPadding(
+                currentUser: isCurrentUser,
+                child: HookBuilder(builder: (context) {
+                  final quoteContent = useMessageConverter(
+                      converter: (state) => state.quoteContent);
+                  final messageId = useMessageConverter(
+                      converter: (state) => state.messageId);
 
-                return QuoteMessage(
-                  messageId: messageId,
-                  quoteMessageId: quoteId,
-                  content: quoteContent,
-                  isTranscriptPage: isTranscriptPage,
-                );
-              }),
+                  return QuoteMessage(
+                    messageId: messageId,
+                    quoteMessageId: quoteId,
+                    quoteContent: quoteContent,
+                    isTranscriptPage: isTranscriptPage,
+                  );
+                }),
+              ),
             ),
             _child,
           ],
@@ -136,7 +146,7 @@ class MessageBubble extends HookWidget {
         onTap: () {
           final message = context.message;
           context.read<BlinkCubit>().blinkByMessageId(message.messageId);
-          ConversationCubit.selectConversation(
+          ConversationStateNotifier.selectConversation(
             context,
             message.conversationId,
             initIndexMessageId: message.messageId,
@@ -218,10 +228,11 @@ class MessageBubble extends HookWidget {
   }
 }
 
-class _MessageBubbleNipPadding extends StatelessWidget {
-  const _MessageBubbleNipPadding({
+class MessageBubbleNipPadding extends StatelessWidget {
+  const MessageBubbleNipPadding({
     required this.currentUser,
     required this.child,
+    super.key,
   });
 
   final bool currentUser;

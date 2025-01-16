@@ -1,11 +1,10 @@
 import 'package:drift/drift.dart';
 
-import '../../../utils/extension/extension.dart';
 import '../signal_database.dart';
 
 part 'session_dao.g.dart';
 
-@DriftAccessor(tables: [Sessions])
+@DriftAccessor()
 class SessionDao extends DatabaseAccessor<SignalDatabase>
     with _$SessionDaoMixin {
   SessionDao(super.db);
@@ -24,7 +23,7 @@ class SessionDao extends DatabaseAccessor<SignalDatabase>
               db.sessions.device.equals(1).not()))
         .map((row) => row.read(db.sessions.device))
         .get();
-    return list.whereNotNull().toList();
+    return list.nonNulls.toList();
   }
 
   Future<List<Session>> getSessions(String address) async =>

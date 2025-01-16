@@ -1,18 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:flutter_portal/flutter_portal.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../utils/extension/extension.dart';
 import 'interactive_decorated_box.dart';
 import 'unread_text.dart';
 
-class SelectItem extends HookWidget {
+class SelectItem extends HookConsumerWidget {
   const SelectItem({
     required this.title,
     required this.icon,
+    required this.onTap,
     this.count = 0,
     this.mutedCount = 0,
-    required this.onTap,
     this.selected = false,
     this.showTooltip = true,
     super.key,
@@ -27,7 +28,7 @@ class SelectItem extends HookWidget {
   final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final showed = useState(false);
     final showedTooltip = useState(false);
 
@@ -42,7 +43,7 @@ class SelectItem extends HookWidget {
           ? boxDecoration.copyWith(color: context.theme.sidebarSelected)
           : boxDecoration,
       hoveringColor: context.theme.sidebarSelected
-          .withOpacity(context.theme.sidebarSelected.opacity / 2),
+          .withValues(alpha: context.theme.sidebarSelected.a / 2),
       child: LayoutBuilder(builder: (context, boxConstraints) {
         final hideTitle = boxConstraints.maxWidth < 75;
         final hideUnreadText = boxConstraints.maxWidth < 100;

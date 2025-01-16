@@ -110,6 +110,16 @@ class Localization {
     );
   }
 
+  /// `Add a caption`
+  String get addACaption {
+    return Intl.message(
+      'Add a caption',
+      name: 'addACaption',
+      desc: '',
+      args: [],
+    );
+  }
+
   /// `+ Add Bot`
   String get addBotWithPlus {
     return Intl.message(
@@ -175,6 +185,16 @@ class Localization {
     return Intl.message(
       'Mixin ID or Phone number',
       name: 'addPeopleSearchHint',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Add Proxy`
+  String get addProxy {
+    return Intl.message(
+      'Add Proxy',
+      name: 'addProxy',
       desc: '',
       args: [],
     );
@@ -280,6 +300,26 @@ class Localization {
     );
   }
 
+  /// `Anonymous`
+  String get anonymous {
+    return Intl.message(
+      'Anonymous',
+      name: 'anonymous',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Anonymous Number`
+  String get anonymousNumber {
+    return Intl.message(
+      'Anonymous Number',
+      name: 'anonymousNumber',
+      desc: '',
+      args: [],
+    );
+  }
+
   /// `Disallow sharing of this URL`
   String get appCardShareDisallow {
     return Intl.message(
@@ -350,6 +390,16 @@ class Localization {
     );
   }
 
+  /// `Auto Lock`
+  String get autoLock {
+    return Intl.message(
+      'Auto Lock',
+      name: 'autoLock',
+      desc: '',
+      args: [],
+    );
+  }
+
   /// `Avatar`
   String get avatar {
     return Intl.message(
@@ -375,6 +425,16 @@ class Localization {
     return Intl.message(
       'Biography',
       name: 'biography',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Biometric`
+  String get biometric {
+    return Intl.message(
+      'Biometric',
+      name: 'biometric',
       desc: '',
       args: [],
     );
@@ -497,6 +557,16 @@ class Localization {
       name: 'changedDisappearingMessageSettings',
       desc: '',
       args: [arg0],
+    );
+  }
+
+  /// `Chat`
+  String get chat {
+    return Intl.message(
+      'Chat',
+      name: 'chat',
+      desc: '',
+      args: [],
     );
   }
 
@@ -744,11 +814,51 @@ class Localization {
     );
   }
 
+  /// `Closing Balance`
+  String get closingBalance {
+    return Intl.message(
+      'Closing Balance',
+      name: 'closingBalance',
+      desc: '',
+      args: [],
+    );
+  }
+
   /// `Collapse`
   String get collapse {
     return Intl.message(
       'Collapse',
       name: 'collapse',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Collectible`
+  String get collectible {
+    return Intl.message(
+      'Collectible',
+      name: 'collectible',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Collectibles`
+  String get collectibles {
+    return Intl.message(
+      'Collectibles',
+      name: 'collectibles',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Collection`
+  String get collection {
+    return Intl.message(
+      'Collection',
+      name: 'collection',
       desc: '',
       args: [],
     );
@@ -769,6 +879,46 @@ class Localization {
     return Intl.message(
       'Confirm',
       name: 'confirm',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Enter again to confirm the passcode`
+  String get confirmPasscodeDesc {
+    return Intl.message(
+      'Enter again to confirm the passcode',
+      name: 'confirmPasscodeDesc',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Are you sure to sync the chat history from the phone?`
+  String get confirmSyncChatsFromPhone {
+    return Intl.message(
+      'Are you sure to sync the chat history from the phone?',
+      name: 'confirmSyncChatsFromPhone',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Are you sure to sync the chat history to the phone?`
+  String get confirmSyncChatsToPhone {
+    return Intl.message(
+      'Are you sure to sync the chat history to the phone?',
+      name: 'confirmSyncChatsToPhone',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Confirmations`
+  String get confirmations {
+    return Intl.message(
+      'Confirmations',
+      name: 'confirmations',
       desc: '',
       args: [],
     );
@@ -874,6 +1024,16 @@ class Localization {
     );
   }
 
+  /// `Copy Image`
+  String get copyImage {
+    return Intl.message(
+      'Copy Image',
+      name: 'copyImage',
+      desc: '',
+      args: [],
+    );
+  }
+
   /// `Copy Invite Link`
   String get copyInvite {
     return Intl.message(
@@ -889,6 +1049,26 @@ class Localization {
     return Intl.message(
       'Copy Link',
       name: 'copyLink',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Copy Selected Text`
+  String get copySelectedText {
+    return Intl.message(
+      'Copy Selected Text',
+      name: 'copySelectedText',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Copy Text`
+  String get copyText {
+    return Intl.message(
+      'Copy Text',
+      name: 'copyText',
       desc: '',
       args: [],
     );
@@ -931,6 +1111,16 @@ class Localization {
       name: 'createGroup',
       desc: '',
       args: [],
+    );
+  }
+
+  /// `Created {arg0}`
+  String created(Object arg0) {
+    return Intl.message(
+      'Created $arg0',
+      name: 'created',
+      desc: '',
+      args: [arg0],
     );
   }
 
@@ -989,6 +1179,56 @@ class Localization {
     return Intl.message(
       'Data loading, please wait...',
       name: 'dataLoading',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `The database is corrupted and cannot be recovered. Clicking continue will create a new database file.`
+  String get databaseCorruptedTips {
+    return Intl.message(
+      'The database is corrupted and cannot be recovered. Clicking continue will create a new database file.',
+      name: 'databaseCorruptedTips',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `The database file is locked and cannot be accessed. Please try restarting the application or the system and try again.`
+  String get databaseLockedTips {
+    return Intl.message(
+      'The database file is locked and cannot be accessed. Please try restarting the application or the system and try again.',
+      name: 'databaseLockedTips',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Cannot open the database. The file is not a valid database file.`
+  String get databaseNotADbTips {
+    return Intl.message(
+      'Cannot open the database. The file is not a valid database file.',
+      name: 'databaseNotADbTips',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Create a new database file and the old file will be deleted.`
+  String get databaseRecreateTips {
+    return Intl.message(
+      'Create a new database file and the old file will be deleted.',
+      name: 'databaseRecreateTips',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `The database is being upgraded, it may take several minutes, please do not close this App.`
+  String get databaseUpgradeTips {
+    return Intl.message(
+      'The database is being upgraded, it may take several minutes, please do not close this App.',
+      name: 'databaseUpgradeTips',
       desc: '',
       args: [],
     );
@@ -1114,11 +1354,31 @@ class Localization {
     );
   }
 
+  /// `Deposit Hash`
+  String get depositHash {
+    return Intl.message(
+      'Deposit Hash',
+      name: 'depositHash',
+      desc: '',
+      args: [],
+    );
+  }
+
   /// `Developer`
   String get developer {
     return Intl.message(
       'Developer',
       name: 'developer',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Transfer failed`
+  String get deviceTransferFailed {
+    return Intl.message(
+      'Transfer failed',
+      name: 'deviceTransferFailed',
       desc: '',
       args: [],
     );
@@ -1131,6 +1391,16 @@ class Localization {
       name: 'disableDisappearingMessage',
       desc: '',
       args: [arg0],
+    );
+  }
+
+  /// `Disabled`
+  String get disabled {
+    return Intl.message(
+      'Disabled',
+      name: 'disabled',
+      desc: '',
+      args: [],
     );
   }
 
@@ -1219,6 +1489,16 @@ class Localization {
     return Intl.message(
       'Download Link:',
       name: 'downloadLink',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Draft`
+  String get draft {
+    return Intl.message(
+      'Draft',
+      name: 'draft',
       desc: '',
       args: [],
     );
@@ -1324,11 +1604,41 @@ class Localization {
     );
   }
 
+  /// `Enable push notification`
+  String get enablePushNotification {
+    return Intl.message(
+      'Enable push notification',
+      name: 'enablePushNotification',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Encrypt zip file with password`
+  String get encryptZipFileWithPassword {
+    return Intl.message(
+      'Encrypt zip file with password',
+      name: 'encryptZipFileWithPassword',
+      desc: '',
+      args: [],
+    );
+  }
+
   /// `Enter your PIN to delete your account`
   String get enterPinToDeleteAccount {
     return Intl.message(
       'Enter your PIN to delete your account',
       name: 'enterPinToDeleteAccount',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Return/Enter ⏎ to Send`
+  String get enterToSend {
+    return Intl.message(
+      'Return/Enter ⏎ to Send',
+      name: 'enterToSend',
       desc: '',
       args: [],
     );
@@ -1484,10 +1794,10 @@ class Localization {
     );
   }
 
-  /// `ERROR 20130: Invalid emergency contact`
+  /// `ERROR 20130: Invalid recovery contact`
   String get errorInvalidEmergencyContact {
     return Intl.message(
-      'ERROR 20130: Invalid emergency contact',
+      'ERROR 20130: Invalid recovery contact',
       name: 'errorInvalidEmergencyContact',
       desc: '',
       args: [],
@@ -1499,6 +1809,16 @@ class Localization {
     return Intl.message(
       'ERROR 20118: Invalid PIN format.',
       name: 'errorInvalidPinFormat',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `ERROR 20118: To enhance the security of the Mixin network, Mixin API has temporarily suspended the upgrading from D3M-PIN to TIP. Please refer to the documentation for details and register for processing.`
+  String get errorLegacyPin {
+    return Intl.message(
+      'ERROR 20118: To enhance the security of the Mixin network, Mixin API has temporarily suspended the upgrading from D3M-PIN to TIP. Please refer to the documentation for details and register for processing.',
+      name: 'errorLegacyPin',
       desc: '',
       args: [],
     );
@@ -1798,6 +2118,16 @@ class Localization {
     );
   }
 
+  /// `ERROR 20137: Withdrawal suspend.`
+  String get errorWithdrawalSuspend {
+    return Intl.message(
+      'ERROR 20137: Withdrawal suspend.',
+      name: 'errorWithdrawalSuspend',
+      desc: '',
+      args: [],
+    );
+  }
+
   /// `Exit`
   String get exit {
     return Intl.message(
@@ -1823,6 +2153,16 @@ class Localization {
     return Intl.message(
       'Failed',
       name: 'failed',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `An error occurred while opening the database.`
+  String get failedToOpenDatabase {
+    return Intl.message(
+      'An error occurred while opening the database.',
+      name: 'failedToOpenDatabase',
       desc: '',
       args: [],
     );
@@ -1918,11 +2258,11 @@ class Localization {
     );
   }
 
-  /// `Follow us on Twitter`
-  String get followUsOnTwitter {
+  /// `Follow us on X`
+  String get followUsOnX {
     return Intl.message(
-      'Follow us on Twitter',
-      name: 'followUsOnTwitter',
+      'Follow us on X',
+      name: 'followUsOnX',
       desc: '',
       args: [],
     );
@@ -1978,10 +2318,10 @@ class Localization {
     );
   }
 
-  /// `You already in the group`
+  /// `You are already in the group.`
   String get groupAlreadyIn {
     return Intl.message(
-      'You already in the group',
+      'You are already in the group.',
       name: 'groupAlreadyIn',
       desc: '',
       args: [],
@@ -2048,11 +2388,21 @@ class Localization {
     );
   }
 
-  /// `Groups In Common`
+  /// `Groups in Common`
   String get groupsInCommon {
     return Intl.message(
-      'Groups In Common',
+      'Groups in Common',
       name: 'groupsInCommon',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `HASH`
+  String get hash {
+    return Intl.message(
+      'HASH',
+      name: 'hash',
       desc: '',
       args: [],
     );
@@ -2088,6 +2438,16 @@ class Localization {
     );
   }
 
+  /// `Host`
+  String get host {
+    return Intl.message(
+      'Host',
+      name: 'host',
+      desc: '',
+      args: [],
+    );
+  }
+
   /// `{count, plural, one{{arg0} Hour} other{{arg0} Hours}}`
   String hour(num count, Object arg0) {
     return Intl.plural(
@@ -2115,6 +2475,16 @@ class Localization {
     return Intl.message(
       'I’m good.',
       name: 'iAmGood',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `ID`
+  String get id {
+    return Intl.message(
+      'ID',
+      name: 'id',
       desc: '',
       args: [],
     );
@@ -2170,6 +2540,16 @@ class Localization {
     );
   }
 
+  /// `Invalid sticker format`
+  String get invalidStickerFormat {
+    return Intl.message(
+      'Invalid sticker format',
+      name: 'invalidStickerFormat',
+      desc: '',
+      args: [],
+    );
+  }
+
   /// `Anyone with Mixin can follow this link to join this group. Only share it with people you trust.`
   String get inviteInfo {
     return Intl.message(
@@ -2200,23 +2580,23 @@ class Localization {
     );
   }
 
-  /// `Joined in {arg0}`
+  /// `Joined on {arg0}`
   String joinedIn(Object arg0) {
     return Intl.message(
-      'Joined in $arg0',
+      'Joined on $arg0',
       name: 'joinedIn',
       desc: '',
       args: [arg0],
     );
   }
 
-  /// `Your account will be deleted on {arg0}, if you continue to log in, the request to delete your account will be cancelled.`
-  String landingDeleteContent(Object arg0) {
+  /// `You requested to delete your account on {arg0}. The account will be deleted on {arg1}. If you continue to login, your account deletion will be cancelled.`
+  String landingDeleteContent(Object arg0, Object arg1) {
     return Intl.message(
-      'Your account will be deleted on $arg0, if you continue to log in, the request to delete your account will be cancelled.',
+      'You requested to delete your account on $arg0. The account will be deleted on $arg1. If you continue to login, your account deletion will be cancelled.',
       name: 'landingDeleteContent',
       desc: '',
-      args: [arg0],
+      args: [arg0, arg1],
     );
   }
 
@@ -2330,6 +2710,16 @@ class Localization {
     );
   }
 
+  /// `Lock`
+  String get lock {
+    return Intl.message(
+      'Lock',
+      name: 'lock',
+      desc: '',
+      args: [],
+    );
+  }
+
   /// `Log in`
   String get logIn {
     return Intl.message(
@@ -2410,10 +2800,10 @@ class Localization {
     );
   }
 
-  /// `Messages to this conversation are encrypted end-to-end, tap for more info.`
+  /// `Messages to this conversation are end-to-end encrypted, tap for more info.`
   String get messageE2ee {
     return Intl.message(
-      'Messages to this conversation are encrypted end-to-end, tap for more info.',
+      'Messages to this conversation are end-to-end encrypted, tap for more info.',
       name: 'messageE2ee',
       desc: '',
       args: [],
@@ -2477,6 +2867,18 @@ class Localization {
       name: 'minimize',
       desc: '',
       args: [],
+    );
+  }
+
+  /// `{count, plural, one{{arg0} Minute} other{{arg0} Minutes}}`
+  String minute(num count, Object arg0) {
+    return Intl.plural(
+      count,
+      one: '$arg0 Minute',
+      other: '$arg0 Minutes',
+      name: 'minute',
+      desc: '',
+      args: [count, arg0],
     );
   }
 
@@ -2720,10 +3122,20 @@ class Localization {
     );
   }
 
-  /// `Don't miss messages from your friends.`
+  /// `This Device is not supported Biometric authentication`
+  String get notSupportBiometric {
+    return Intl.message(
+      'This Device is not supported Biometric authentication',
+      name: 'notSupportBiometric',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Enable push notifications to stay updated on price alerts and messages in real time.`
   String get notificationContent {
     return Intl.message(
-      'Don\'t miss messages from your friends.',
+      'Enable push notifications to stay updated on price alerts and messages in real time.',
       name: 'notificationContent',
       desc: '',
       args: [],
@@ -2810,6 +3222,16 @@ class Localization {
     );
   }
 
+  /// `Open`
+  String get open {
+    return Intl.message(
+      'Open',
+      name: 'open',
+      desc: '',
+      args: [],
+    );
+  }
+
   /// `Open Home page`
   String get openHomePage {
     return Intl.message(
@@ -2835,6 +3257,16 @@ class Localization {
     return Intl.message(
       'open log directory',
       name: 'openLogDirectory',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Opening Balance`
+  String get openingBalance {
+    return Intl.message(
+      'Opening Balance',
+      name: 'openingBalance',
       desc: '',
       args: [],
     );
@@ -2867,6 +3299,26 @@ class Localization {
       name: 'participantsCount',
       desc: '',
       args: [arg0],
+    );
+  }
+
+  /// `Passcode incorrect`
+  String get passcodeIncorrect {
+    return Intl.message(
+      'Passcode incorrect',
+      name: 'passcodeIncorrect',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Password`
+  String get password {
+    return Intl.message(
+      'Password',
+      name: 'password',
+      desc: '',
+      args: [],
     );
   }
 
@@ -2912,6 +3364,16 @@ class Localization {
     );
   }
 
+  /// `Pictures & Videos`
+  String get picturesAndVideos {
+    return Intl.message(
+      'Pictures & Videos',
+      name: 'picturesAndVideos',
+      desc: '',
+      args: [],
+    );
+  }
+
   /// `Pin`
   String get pinTitle {
     return Intl.message(
@@ -2931,6 +3393,16 @@ class Localization {
       name: 'pinnedMessageTitle',
       desc: '',
       args: [count, arg0],
+    );
+  }
+
+  /// `Port`
+  String get port {
+    return Intl.message(
+      'Port',
+      name: 'port',
+      desc: '',
+      args: [],
     );
   }
 
@@ -2969,6 +3441,56 @@ class Localization {
     return Intl.message(
       'Privacy Policy',
       name: 'privacyPolicy',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Proxy`
+  String get proxy {
+    return Intl.message(
+      'Proxy',
+      name: 'proxy',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Authentication (Optional)`
+  String get proxyAuth {
+    return Intl.message(
+      'Authentication (Optional)',
+      name: 'proxyAuth',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Connection`
+  String get proxyConnection {
+    return Intl.message(
+      'Connection',
+      name: 'proxyConnection',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Proxy Type`
+  String get proxyType {
+    return Intl.message(
+      'Proxy Type',
+      name: 'proxyType',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `QR Code expired, please retry`
+  String get qrCodeExpiredDesc {
+    return Intl.message(
+      'QR Code expired, please retry',
+      name: 'qrCodeExpiredDesc',
       desc: '',
       args: [],
     );
@@ -3134,6 +3656,16 @@ class Localization {
     );
   }
 
+  /// `Send the conversation log to developers?`
+  String get reportTitle {
+    return Intl.message(
+      'Send the conversation log to developers?',
+      name: 'reportTitle',
+      desc: '',
+      args: [],
+    );
+  }
+
   /// `Resend code`
   String get resendCode {
     return Intl.message(
@@ -3169,6 +3701,16 @@ class Localization {
     return Intl.message(
       'Reset Link',
       name: 'resetLink',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Retry`
+  String get retry {
+    return Intl.message(
+      'Retry',
+      name: 'retry',
       desc: '',
       args: [],
     );
@@ -3239,6 +3781,16 @@ class Localization {
     return Intl.message(
       'Warning: Many users reported this account as a scam. Please be careful, especially if it asks you for money',
       name: 'scamWarning',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Screen Passcode`
+  String get screenPasscode {
+    return Intl.message(
+      'Screen Passcode',
+      name: 'screenPasscode',
       desc: '',
       args: [],
     );
@@ -3326,6 +3878,16 @@ class Localization {
     );
   }
 
+  /// `Security`
+  String get security {
+    return Intl.message(
+      'Security',
+      name: 'security',
+      desc: '',
+      args: [],
+    );
+  }
+
   /// `Select`
   String get select {
     return Intl.message(
@@ -3361,6 +3923,16 @@ class Localization {
     return Intl.message(
       'Send quickly',
       name: 'sendQuickly',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Send to Developer`
+  String get sendToDeveloper {
+    return Intl.message(
+      'Send to Developer',
+      name: 'sendToDeveloper',
       desc: '',
       args: [],
     );
@@ -3403,6 +3975,16 @@ class Localization {
       name: 'setDisappearingMessageTimeTo',
       desc: '',
       args: [arg0, arg1],
+    );
+  }
+
+  /// `Set Passcode to unlock Mixin Messenger`
+  String get setPasscodeDesc {
+    return Intl.message(
+      'Set Passcode to unlock Mixin Messenger',
+      name: 'setPasscodeDesc',
+      desc: '',
+      args: [],
     );
   }
 
@@ -3546,6 +4128,16 @@ class Localization {
     );
   }
 
+  /// `Show Identity Number`
+  String get showIdentityNumber {
+    return Intl.message(
+      'Show Identity Number',
+      name: 'showIdentityNumber',
+      desc: '',
+      args: [],
+    );
+  }
+
   /// `Show Mixin`
   String get showMixin {
     return Intl.message(
@@ -3576,11 +4168,11 @@ class Localization {
     );
   }
 
-  /// `Sign in with phone number`
-  String get signWithPhoneNumber {
+  /// `Sign in with mobile number`
+  String get signWithMobileNumber {
     return Intl.message(
-      'Sign in with phone number',
-      name: 'signWithPhoneNumber',
+      'Sign in with mobile number',
+      name: 'signWithMobileNumber',
       desc: '',
       args: [],
     );
@@ -3606,6 +4198,16 @@ class Localization {
     );
   }
 
+  /// `Snapshot Hash`
+  String get snapshotHash {
+    return Intl.message(
+      'Snapshot Hash',
+      name: 'snapshotHash',
+      desc: '',
+      args: [],
+    );
+  }
+
   /// `Status`
   String get status {
     return Intl.message(
@@ -3621,6 +4223,16 @@ class Localization {
     return Intl.message(
       'Sticker',
       name: 'sticker',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Requires stickers file size larger than 1KB and less than 1MB, width and height between 128px and 1024px.`
+  String get stickerAddInvalidSize {
+    return Intl.message(
+      'Requires stickers file size larger than 1KB and less than 1MB, width and height between 128px and 1024px.',
+      name: 'stickerAddInvalidSize',
       desc: '',
       args: [],
     );
@@ -3756,6 +4368,16 @@ class Localization {
     );
   }
 
+  /// `To`
+  String get to {
+    return Intl.message(
+      'To',
+      name: 'to',
+      desc: '',
+      args: [],
+    );
+  }
+
   /// `Today`
   String get today {
     return Intl.message(
@@ -3856,21 +4478,51 @@ class Localization {
     );
   }
 
-  /// `Travel & Places`
-  String get travelAndPlaces {
+  /// `Transfer completed`
+  String get transferCompleted {
     return Intl.message(
-      'Travel & Places',
-      name: 'travelAndPlaces',
+      'Transfer completed',
+      name: 'transferCompleted',
       desc: '',
       args: [],
     );
   }
 
-  /// `Turn On Notifications`
-  String get turnOnNotifications {
+  /// `Protocol version does not match, transfer failed. Please upgrade the application first.`
+  String get transferProtocolVersionNotMatched {
     return Intl.message(
-      'Turn On Notifications',
-      name: 'turnOnNotifications',
+      'Protocol version does not match, transfer failed. Please upgrade the application first.',
+      name: 'transferProtocolVersionNotMatched',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Transferring Chat`
+  String get transferringChats {
+    return Intl.message(
+      'Transferring Chat',
+      name: 'transferringChats',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Please do not turn off the screen and keep the Mixin running in the foreground while syncing.`
+  String get transferringChatsTips {
+    return Intl.message(
+      'Please do not turn off the screen and keep the Mixin running in the foreground while syncing.',
+      name: 'transferringChatsTips',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Travel & Places`
+  String get travelAndPlaces {
+    return Intl.message(
+      'Travel & Places',
+      name: 'travelAndPlaces',
       desc: '',
       args: [],
     );
@@ -3966,6 +4618,36 @@ class Localization {
     );
   }
 
+  /// `Unknow error`
+  String get unknowError {
+    return Intl.message(
+      'Unknow error',
+      name: 'unknowError',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Unlock Mixin Messenger`
+  String get unlockMixinMessenger {
+    return Intl.message(
+      'Unlock Mixin Messenger',
+      name: 'unlockMixinMessenger',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Enter Passcode to unlock Mixin Messenger`
+  String get unlockWithWasscode {
+    return Intl.message(
+      'Enter Passcode to unlock Mixin Messenger',
+      name: 'unlockWithWasscode',
+      desc: '',
+      args: [],
+    );
+  }
+
   /// `Unmute`
   String get unmute {
     return Intl.message(
@@ -4016,11 +4698,81 @@ class Localization {
     );
   }
 
+  /// `Update Mixin`
+  String get updateMixin {
+    return Intl.message(
+      'Update Mixin',
+      name: 'updateMixin',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `The current version ({arg0}) is no longer available!\nPlease click "Update" below to update to the latest version from the Google Play.`
+  String updateMixinDescription(Object arg0) {
+    return Intl.message(
+      'The current version ($arg0) is no longer available!\nPlease click "Update" below to update to the latest version from the Google Play.',
+      name: 'updateMixinDescription',
+      desc: '',
+      args: [arg0],
+    );
+  }
+
+  /// `Upgrade`
+  String get upgrade {
+    return Intl.message(
+      'Upgrade',
+      name: 'upgrade',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Upgrading`
+  String get upgrading {
+    return Intl.message(
+      'Upgrading',
+      name: 'upgrading',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Use Biometric`
+  String get useBiometric {
+    return Intl.message(
+      'Use Biometric',
+      name: 'useBiometric',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `The user has deleted his own account.`
+  String get userDeleteHint {
+    return Intl.message(
+      'The user has deleted his own account.',
+      name: 'userDeleteHint',
+      desc: '',
+      args: [],
+    );
+  }
+
   /// `User not found`
   String get userNotFound {
     return Intl.message(
       'User not found',
       name: 'userNotFound',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `Username`
+  String get username {
+    return Intl.message(
+      'Username',
+      name: 'username',
       desc: '',
       args: [],
     );
@@ -4136,6 +4888,16 @@ class Localization {
     );
   }
 
+  /// `Withdrawal Hash`
+  String get withdrawalHash {
+    return Intl.message(
+      'Withdrawal Hash',
+      name: 'withdrawalHash',
+      desc: '',
+      args: [],
+    );
+  }
+
   /// `You`
   String get you {
     return Intl.message(
@@ -4173,6 +4935,7 @@ class AppLocalizationDelegate extends LocalizationsDelegate<Localization> {
   List<Locale> get supportedLocales {
     return const <Locale>[
       Locale.fromSubtags(languageCode: 'en'),
+      Locale.fromSubtags(languageCode: 'es'),
       Locale.fromSubtags(languageCode: 'in'),
       Locale.fromSubtags(languageCode: 'ja'),
       Locale.fromSubtags(languageCode: 'ms'),

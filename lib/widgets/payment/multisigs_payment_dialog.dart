@@ -1,16 +1,17 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:flutter_svg/svg.dart';
-import 'package:qr_flutter/qr_flutter.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../constants/resources.dart';
 import '../../db/dao/asset_dao.dart';
+import '../../db/database_event_bus.dart';
 import '../../utils/extension/extension.dart';
 import '../../utils/hook.dart';
 import '../avatar_view/avatar_view.dart';
 import '../buttons.dart';
 import '../dialog.dart';
 import '../message/item/transfer/transfer_page.dart';
+import '../qr_code.dart';
 
 class MultisigsPaymentItem {
   const MultisigsPaymentItem({
@@ -77,8 +78,8 @@ class _PaymentDialog extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Row(
-                  children: const [
+                const Row(
+                  children: [
                     Spacer(),
                     Padding(
                       padding: EdgeInsets.only(right: 12, top: 12),
@@ -94,7 +95,7 @@ class _PaymentDialog extends StatelessWidget {
       );
 }
 
-class _MultisigsPaymentBody extends HookWidget {
+class _MultisigsPaymentBody extends HookConsumerWidget {
   const _MultisigsPaymentBody({
     required this.item,
   });
@@ -102,7 +103,7 @@ class _MultisigsPaymentBody extends HookWidget {
   final MultisigsPaymentItem item;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final asset = item.asset;
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -238,16 +239,21 @@ class _OverlappedUserAvatars extends StatelessWidget {
       );
 }
 
-class _UserIcon extends HookWidget {
+class _UserIcon extends HookConsumerWidget {
   const _UserIcon({required this.userId});
 
   final String userId;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final user = useMemoizedStream(() => context.accountServer.database.userDao
-        .userById(userId)
-        .watchSingleOrNullThrottle(kDefaultThrottleDuration)).data;
+            .userById(userId)
+            .watchSingleOrNullWithStream(
+          eventStreams: [
+            DataBaseEventBus.instance.watchUpdateUserStream([userId])
+          ],
+          duration: kDefaultThrottleDuration,
+        )).data;
 
     final Widget child;
 
@@ -286,13 +292,9 @@ class _QrCodeLayout extends StatelessWidget {
           const SizedBox(height: 32),
           ClipRRect(
             borderRadius: const BorderRadius.all(Radius.circular(8)),
-            child: SizedBox.square(
+            child: QrCode(
               dimension: 180,
-              child: QrImage(
-                data: uri.toString(),
-                foregroundColor: Colors.black,
-                backgroundColor: Colors.white,
-              ),
+              data: uri.toString(),
             ),
           ),
           const SizedBox(height: 32),
@@ -311,7 +313,7 @@ class _DoneLayout extends StatelessWidget {
             width: 80,
             height: 80,
             decoration: BoxDecoration(
-              color: context.theme.green.withOpacity(0.2),
+              color: context.theme.green.withValues(alpha: 0.2),
               shape: BoxShape.circle,
             ),
             child: Center(

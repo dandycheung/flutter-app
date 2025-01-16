@@ -5,7 +5,7 @@
 #define MyAppPublisher "Mixin, Inc."
 #define MyAppURL "https://mixin.one/"
 #define MyAppExeName "mixin_desktop.exe"
-#define MyAppPath ".\build\windows\runner\Release\" + MyAppExeName
+#define MyAppPath ".\build\windows\x64\runner\Release\" + MyAppExeName
 #define MyAppVersion GetVersionNumbersString(MyAppPath)
 
 [Setup]
@@ -24,7 +24,7 @@ DisableProgramGroupPage=yes
 ; Remove the following line to run in administrative install mode (install for all users.)
 PrivilegesRequired=lowest
 OutputDir={#SourcePath}\build\
-OutputBaseFilename=mixin_setup
+OutputBaseFilename=mixin_desktop_windows_setup_amd64
 SetupIconFile={#SourcePath}\windows\runner\resources\app_icon.ico
 Compression=lzma
 SolidCompression=yes
@@ -39,8 +39,8 @@ Name: "chinesesimplified"; MessagesFile: "{#SourcePath}dist\exe\ChineseSimplifie
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "{#SourcePath}\build\windows\runner\Release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SourcePath}\build\windows\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#SourcePath}\build\windows\x64\runner\Release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourcePath}\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#SourcePath}\windows\libs\vclibs\*"; DestDir: "{app}";
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 

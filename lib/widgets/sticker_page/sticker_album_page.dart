@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 
+import '../../db/database_event_bus.dart';
 import '../../db/mixin_database.dart';
 import '../../utils/extension/extension.dart';
 import '../../utils/hook.dart';
@@ -10,10 +11,10 @@ import '../dialog.dart';
 import 'sticker_item.dart';
 import 'sticker_store.dart';
 
-class StickerAlbumPage extends HookWidget {
+class StickerAlbumPage extends HookConsumerWidget {
   const StickerAlbumPage({
-    super.key,
     required this.albumId,
+    super.key,
     this.album,
     this.stickers,
   });
@@ -23,11 +24,18 @@ class StickerAlbumPage extends HookWidget {
   final String albumId;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final album = useMemoizedStream(
           () => context.database.stickerAlbumDao
               .album(albumId)
-              .watchSingleThrottle(kVerySlowThrottleDuration),
+              .watchSingleWithStream(
+            eventStreams: [
+              DataBaseEventBus.instance.watchUpdateStickerStream(
+                albumIds: [albumId],
+              )
+            ],
+            duration: kVerySlowThrottleDuration,
+          ),
           keys: [albumId],
         ).data ??
         this.album;
@@ -77,17 +85,17 @@ class _StickerAlbumHeader extends StatelessWidget {
       );
 }
 
-class _StickerAlbumDetail extends HookWidget {
+class _StickerAlbumDetail extends HookConsumerWidget {
   const _StickerAlbumDetail({
-    this.stickers,
     required this.album,
+    this.stickers,
   });
 
   final StickerAlbum album;
   final List<Sticker>? stickers;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final stickers = useMemoizedFuture(() async {
           if (this.stickers != null) return this.stickers;
           return context.database.stickerDao
@@ -115,9 +123,9 @@ class _StickerAlbumDetail extends HookWidget {
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
                 colors: [
-                  context.theme.popUp.withOpacity(0),
-                  context.theme.popUp.withOpacity(0.36),
-                  context.theme.popUp.withOpacity(1),
+                  context.theme.popUp.withValues(alpha: 0),
+                  context.theme.popUp.withValues(alpha: 0.36),
+                  context.theme.popUp.withValues(alpha: 1),
                 ],
               ),
             ),

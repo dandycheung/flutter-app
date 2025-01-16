@@ -1,19 +1,27 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui show BoxHeightStyle;
 
+import 'package:equatable/equatable.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:flutter_svg/svg.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart' hide ChangeNotifierProvider;
 import 'package:image_picker/image_picker.dart';
-import 'package:provider/provider.dart';
+import 'package:provider/provider.dart' hide Consumer;
 import 'package:rxdart/rxdart.dart';
+import 'package:simple_animations/simple_animations.dart';
+import 'package:super_context_menu/super_context_menu.dart';
 
 import '../../../constants/constants.dart';
+import '../../../constants/icon_fonts.dart';
 import '../../../constants/resources.dart';
+import '../../../db/database_event_bus.dart';
 import '../../../db/mixin_database.dart' hide Offset;
 import '../../../enum/encrypt_category.dart';
 import '../../../utils/app_lifecycle.dart';
@@ -25,49 +33,36 @@ import '../../../utils/reg_exp_utils.dart';
 import '../../../utils/system/clipboard.dart';
 import '../../../widgets/action_button.dart';
 import '../../../widgets/actions/actions.dart';
+import '../../../widgets/high_light_text.dart';
 import '../../../widgets/hover_overlay.dart';
 import '../../../widgets/mention_panel.dart';
 import '../../../widgets/menu.dart';
 import '../../../widgets/message/item/quote_message.dart';
-import '../../../widgets/message/item/text/mention_builder.dart';
 import '../../../widgets/sticker_page/bloc/cubit/sticker_albums_cubit.dart';
-import '../../../widgets/sticker_page/emoji_page.dart';
 import '../../../widgets/sticker_page/sticker_page.dart';
 import '../../../widgets/toast.dart';
-import '../bloc/conversation_cubit.dart';
-import '../bloc/mention_cubit.dart';
-import '../bloc/quote_message_cubit.dart';
-import '../bloc/recall_message_bloc.dart';
-import '../route/responsive_navigator_cubit.dart';
+import '../../../widgets/user_selector/conversation_selector.dart';
+import '../../provider/abstract_responsive_navigator.dart';
+import '../../provider/conversation_provider.dart';
+import '../../provider/mention_cache_provider.dart';
+import '../../provider/mention_provider.dart';
+import '../../provider/quote_message_provider.dart';
+import '../../provider/recall_message_reedit_provider.dart';
 import 'chat_page.dart';
 import 'files_preview.dart';
 import 'voice_recorder_bottom_bar.dart';
 
-class InputContainer extends HookWidget {
+class InputContainer extends HookConsumerWidget {
   const InputContainer({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final conversationId =
-        useBlocStateConverter<ConversationCubit, ConversationState?, String?>(
-      converter: (state) => state?.conversationId,
-      when: (state) => state != null,
-    );
+  Widget build(BuildContext context, WidgetRef ref) {
+    final conversationId = ref.watch(currentConversationIdProvider);
 
-    final hasParticipant =
-        useBlocStateConverter<ConversationCubit, ConversationState?, bool>(
-      converter: (state) {
-        if (state?.conversation == null) return true;
-        return state?.participant != null;
-      },
-    );
-
-    useEffect(() {
-      context.read<QuoteMessageCubit>().emit(null);
-    }, [conversationId]);
+    final hasParticipant = ref.watch(currentConversationHasParticipantProvider);
 
     final voiceRecorderCubit = useBloc(
-      VoiceRecorderCubit.new,
+      () => VoiceRecorderCubit(context.audioMessageService),
       keys: [conversationId],
     );
 
@@ -99,39 +94,28 @@ class InputContainer extends HookWidget {
   }
 }
 
-class _InputContainer extends HookWidget {
+class _InputContainer extends HookConsumerWidget {
   const _InputContainer();
 
   @override
-  Widget build(BuildContext context) {
-    final mentionCubit = useBloc(
-      () => MentionCubit(
-        userDao: context.database.userDao,
-        multiAuthCubit: context.multiAuthCubit,
-      ),
+  Widget build(BuildContext context, WidgetRef ref) {
+    final (conversationId, originalDraft) = ref.watch(
+      conversationProvider.select(
+          (value) => (value?.conversationId, value?.conversation?.draft)),
     );
 
-    final conversationId =
-        useBlocStateConverter<ConversationCubit, ConversationState?, String?>(
-      converter: (state) =>
-          (state?.isLoaded ?? false) ? state?.conversationId : null,
-    );
-
-    final quoteMessageId =
-        useBlocStateConverter<QuoteMessageCubit, MessageItem?, String?>(
-      converter: (state) => state?.messageId,
-    );
+    final quoteMessageId = ref.watch(quoteMessageIdProvider);
 
     final textEditingController = useMemoized(
       () {
-        final draft =
-            context.read<ConversationCubit>().state?.conversation?.draft;
-        return HighlightTextEditingController(
-            initialText: draft,
-            highlightTextStyle: TextStyle(color: context.theme.accent),
-            mentionCache: context.read<MentionCache>())
-          ..selection = TextSelection.fromPosition(
-              TextPosition(offset: draft?.length ?? 0));
+        final draft = ref.read(
+            conversationProvider.select((value) => value?.conversation?.draft));
+        return _HighlightTextEditingController(
+          initialText: draft,
+          highlightTextStyle: TextStyle(color: context.theme.accent),
+          mentionCache: ref.read(mentionCacheProvider),
+        )..selection = TextSelection.fromPosition(
+            TextPosition(offset: draft?.length ?? 0));
       },
       [conversationId],
     );
@@ -139,24 +123,20 @@ class _InputContainer extends HookWidget {
     final textEditingValueStream =
         useValueNotifierConvertSteam(textEditingController);
 
-    useEffect(() {
-      if (conversationId == null) return;
-      mentionCubit.setTextEditingValueStream(
-        textEditingValueStream,
-        context.read<ConversationCubit>().state!,
-      );
-    }, [textEditingValueStream.hashCode, conversationId]);
+    final mentionProviderInstance = mentionProvider(textEditingValueStream);
 
     useEffect(() {
       final updateDraft = context.database.conversationDao.updateDraft;
       return () {
         if (conversationId == null) return;
+        if (textEditingController.text == originalDraft) return;
+
         updateDraft(
           conversationId,
           textEditingController.text,
         );
       };
-    }, [conversationId]);
+    }, [conversationId, originalDraft]);
 
     final focusNode = useFocusNode(onKey: (_, __) => KeyEventResult.ignored);
 
@@ -169,29 +149,30 @@ class _InputContainer extends HookWidget {
     }, [conversationId, quoteMessageId]);
 
     useEffect(() {
-      void onListen(RawKeyEvent value) {
-        if (!isAppActive) return;
-        if (!value.firstInputable) return;
+      bool onListen(KeyEvent value) {
+        if (!isAppActive) return false;
+        if (!value.firstInputable) return false;
 
         final primaryFocus = FocusManager.instance.primaryFocus;
         final focusContext = primaryFocus?.context;
-        if (focusContext == null) return;
+        if (focusContext == null) return false;
         final focusWidget = focusContext.widget;
         final isEditableText = focusWidget is Focus &&
             focusWidget.child is Scrollable &&
             (focusWidget.child as Scrollable).restorationId == 'editable';
-        if (isEditableText) return;
+        if (isEditableText) return false;
 
-        if (ModalRoute.of(focusContext) != ModalRoute.of(context)) return;
+        if (ModalRoute.of(focusContext) != ModalRoute.of(context)) return false;
 
-        if (primaryFocus == focusNode) return;
+        if (primaryFocus == focusNode) return false;
 
         focusNode.requestFocus();
+        return true;
       }
 
-      RawKeyboard.instance.addListener(onListen);
+      HardwareKeyboard.instance.addHandler(onListen);
       return () {
-        RawKeyboard.instance.removeListener(onListen);
+        HardwareKeyboard.instance.removeHandler(onListen);
       };
     }, []);
 
@@ -208,67 +189,61 @@ class _InputContainer extends HookWidget {
       }
     }, [chatSidePageSize]);
 
-    return MultiProvider(
-      providers: [
-        BlocProvider.value(
-          value: mentionCubit,
-        ),
-      ],
-      child: LayoutBuilder(
-        builder: (context, BoxConstraints constraints) =>
-            MentionPanelPortalEntry(
-          textEditingController: textEditingController,
-          constraints: constraints,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const _QuoteMessage(),
-              ConstrainedBox(
-                constraints: const BoxConstraints(
-                  minHeight: 56,
+    return LayoutBuilder(
+      builder: (context, BoxConstraints constraints) => MentionPanelPortalEntry(
+        textEditingController: textEditingController,
+        mentionProviderInstance: mentionProviderInstance,
+        constraints: constraints,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            const _QuoteMessage(),
+            ConstrainedBox(
+              constraints: const BoxConstraints(
+                minHeight: 56,
+              ),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: context.theme.primary,
                 ),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: context.theme.primary,
-                  ),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 8,
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      _FileButton(actionColor: context.theme.icon),
-                      const _ImagePickButton(),
-                      const SizedBox(width: 6),
-                      _StickerButton(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    const _SendActionTypeButton(),
+                    const SizedBox(width: 6),
+                    _StickerButton(
+                      textEditingController: textEditingController,
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: _SendTextField(
+                        focusNode: focusNode,
                         textEditingController: textEditingController,
+                        mentionProviderInstance: mentionProviderInstance,
                       ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: _SendTextField(
-                          focusNode: focusNode,
-                          textEditingController: textEditingController,
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      _AnimatedSendOrVoiceButton(
-                        textEditingController: textEditingController,
-                        textEditingValueStream: textEditingValueStream,
-                      )
-                    ],
-                  ),
+                    ),
+                    const SizedBox(width: 16),
+                    _AnimatedSendOrVoiceButton(
+                      textEditingController: textEditingController,
+                      textEditingValueStream: textEditingValueStream,
+                    )
+                  ],
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
   }
 }
 
-class _AnimatedSendOrVoiceButton extends HookWidget {
+class _AnimatedSendOrVoiceButton extends HookConsumerWidget {
   const _AnimatedSendOrVoiceButton({
     required this.textEditingValueStream,
     required this.textEditingController,
@@ -278,7 +253,7 @@ class _AnimatedSendOrVoiceButton extends HookWidget {
   final TextEditingController textEditingController;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final hasInputText = useMemoizedStream(
           () => textEditingValueStream
               .map((event) => event.text.isNotEmpty)
@@ -326,18 +301,19 @@ class _AnimatedSendOrVoiceButton extends HookWidget {
         if (sendScale >= 0.6)
           Transform.scale(
             scale: sendScale,
-            child: ContextMenuPortalEntry(
-              buildMenus: () => [
-                ContextMenu(
-                  icon: Resources.assetsImagesContextMenuMuteSvg,
+            child: CustomContextMenuWidget(
+              desktopMenuWidgetBuilder: CustomDesktopMenuWidgetBuilder(),
+              menuProvider: (_) => Menu(children: [
+                MenuAction(
+                  image: MenuImage.icon(IconFonts.mute),
                   title: context.l10n.sendWithoutSound,
-                  onTap: () => _sendMessage(
+                  callback: () => _sendMessage(
                     context,
                     textEditingController,
                     silent: true,
                   ),
                 ),
-              ],
+              ]),
               child: ActionButton(
                 name: Resources.assetsImagesIcSendSvg,
                 color: context.theme.icon,
@@ -367,7 +343,7 @@ void _sendPostMessage(
   final text = textEditingController.value.text.trim();
   if (text.isEmpty) return;
 
-  final conversationItem = context.read<ConversationCubit>().state;
+  final conversationItem = context.providerContainer.read(conversationProvider);
   if (conversationItem == null) return;
   if (text.length > kMaxTextLength) {
     showMaxLengthReachedToast(context);
@@ -379,7 +355,7 @@ void _sendPostMessage(
       recipientId: conversationItem.userId);
 
   textEditingController.text = '';
-  context.read<QuoteMessageCubit>().emit(null);
+  context.providerContainer.read(quoteMessageProvider.notifier).state = null;
 }
 
 void _sendMessage(
@@ -390,7 +366,7 @@ void _sendMessage(
   final text = textEditingController.value.text.trim();
   if (text.isEmpty) return;
 
-  final conversationItem = context.read<ConversationCubit>().state;
+  final conversationItem = context.providerContainer.read(conversationProvider);
   if (conversationItem == null) return;
   if (text.length > kMaxTextLength) {
     showMaxLengthReachedToast(context);
@@ -402,35 +378,36 @@ void _sendMessage(
     conversationItem.encryptCategory,
     conversationId: conversationItem.conversationId,
     recipientId: conversationItem.userId,
-    quoteMessageId: context.read<QuoteMessageCubit>().state?.messageId,
+    quoteMessageId: context.providerContainer.read(quoteMessageIdProvider),
     silent: silent,
   );
 
   textEditingController.text = '';
-  context.read<QuoteMessageCubit>().emit(null);
+  context.providerContainer.read(quoteMessageProvider.notifier).state = null;
 }
 
-class _SendTextField extends HookWidget {
+class _SendTextField extends HookConsumerWidget {
   const _SendTextField({
     required this.focusNode,
     required this.textEditingController,
+    required this.mentionProviderInstance,
   });
 
   final FocusNode focusNode;
   final TextEditingController textEditingController;
+  final AutoDisposeStateNotifierProvider<MentionStateNotifier, MentionState>
+      mentionProviderInstance;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final textEditingValueStream =
         useValueNotifierConvertSteam(textEditingController);
-
-    final mentionCubit = context.read<MentionCubit>();
-    final mentionStream = mentionCubit.stream;
+    final mentionStream = ref.watch(mentionProviderInstance.notifier).stream;
 
     final sendable = useMemoizedStream(
           () => Rx.combineLatest2<TextEditingValue, MentionState, bool>(
               textEditingValueStream,
-              mentionStream.startWith(mentionCubit.state),
+              mentionStream.startWith(ref.read(mentionProviderInstance)),
               (textEditingValue, mentionState) =>
                   (textEditingValue.text.trim().isNotEmpty) &&
                   (textEditingValue.composing.composed) &&
@@ -442,21 +419,16 @@ class _SendTextField extends HookWidget {
         ).data ??
         true;
 
-    useEffect(() {
-      final subscription = context
-          .read<RecallMessageReeditCubit>()
-          .onReeditStream
-          .listen((event) {
-        textEditingController.text = textEditingController.text + event;
-      });
-      return subscription.cancel;
-    }, [textEditingController]);
+    useEffect(
+        () => ref
+            .read(onReEditStreamProvider)
+            .listen((event) =>
+                textEditingController.text = textEditingController.text + event)
+            .cancel,
+        [textEditingController]);
 
-    final isEncryptConversation =
-        useBlocStateConverter<ConversationCubit, ConversationState?, bool>(
-      bloc: context.read<ConversationCubit>(),
-      converter: (state) => state?.encryptCategory.isEncrypt == true,
-    );
+    final isEncryptConversation = ref.watch(conversationProvider
+        .select((value) => value?.encryptCategory.isEncrypt == true));
 
     final hasInputText = useMemoizedStream(
           () => textEditingValueStream
@@ -502,7 +474,8 @@ class _SendTextField extends HookWidget {
             onInvoke: (_) => _sendPostMessage(context, textEditingController),
           ),
           EscapeIntent: CallbackAction<Intent>(
-            onInvoke: (_) => context.read<QuoteMessageCubit>().emit(null),
+            onInvoke: (_) =>
+                ref.read(quoteMessageProvider.notifier).state = null,
           ),
         },
         child: Stack(
@@ -516,6 +489,9 @@ class _SendTextField extends HookWidget {
                 color: context.theme.text,
                 fontSize: 14,
               ),
+              inputFormatters: [
+                LengthLimitingTextInputFormatter(kMaxTextLength),
+              ],
               textAlignVertical: TextAlignVertical.center,
               decoration: const InputDecoration(
                 isDense: true,
@@ -528,23 +504,26 @@ class _SendTextField extends HookWidget {
                 ),
               ),
               selectionHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle,
+              contextMenuBuilder: (context, state) =>
+                  MixinAdaptiveSelectionToolbar(editableTextState: state),
             ),
             if (!hasInputText)
               Positioned.fill(
                 left: 8,
-                top: 7,
-                child: IgnorePointer(
-                  child: Text(
-                    isEncryptConversation
-                        ? context.l10n.chatHintE2e
-                        : context.l10n.typeMessage,
-                    style: TextStyle(
-                      color: context.theme.secondaryText,
-                      fontSize: 14,
-                      height: 1,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: IgnorePointer(
+                    child: Text(
+                      isEncryptConversation
+                          ? context.l10n.chatHintE2e
+                          : context.l10n.typeMessage,
+                      style: TextStyle(
+                        color: context.theme.secondaryText,
+                        fontSize: 14,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
               )
@@ -555,131 +534,229 @@ class _SendTextField extends HookWidget {
   }
 }
 
-class _QuoteMessage extends StatelessWidget {
+class _QuoteMessage extends HookConsumerWidget {
   const _QuoteMessage();
 
   @override
-  Widget build(BuildContext context) =>
-      BlocBuilder<QuoteMessageCubit, MessageItem?>(
-        builder: (context, message) => TweenAnimationBuilder<double>(
-          tween: Tween(begin: 0, end: message != null ? 1 : 0),
-          duration: const Duration(milliseconds: 150),
-          curve: Curves.easeOut,
-          builder: (BuildContext context, double progress, Widget? child) =>
-              ClipRect(
-            child: Align(
-              alignment: AlignmentDirectional.topEnd,
-              heightFactor: progress,
-              child: child,
-            ),
-          ),
-          child: BlocBuilder<QuoteMessageCubit, MessageItem?>(
-            buildWhen: (a, b) => b != null,
-            builder: (context, message) {
-              if (message == null) return const SizedBox();
-              return DecoratedBox(
-                decoration: BoxDecoration(
-                  color: context.theme.popUp,
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: QuoteMessage(
-                        quoteMessageId: message.messageId,
-                        message: message,
-                      ),
-                    ),
-                    GestureDetector(
-                      onTap: () => context.read<QuoteMessageCubit>().emit(null),
-                      behavior: HitTestBehavior.opaque,
-                      child: Container(
-                        padding: const EdgeInsets.all(14),
-                        child: SvgPicture.asset(
-                          Resources.assetsImagesCloseOvalSvg,
-                          height: 22,
-                          width: 22,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
+  Widget build(BuildContext context, WidgetRef ref) {
+    final quoting =
+        ref.watch(quoteMessageProvider.select((value) => value != null));
+
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: quoting ? 1 : 0),
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOut,
+      builder: (BuildContext context, double progress, Widget? child) =>
+          ClipRect(
+        child: Align(
+          alignment: AlignmentDirectional.topCenter,
+          heightFactor: progress,
+          child: child,
         ),
-      );
+      ),
+      child: Consumer(builder: (context, ref, child) {
+        final message = ref.watch(lastQuoteMessageProvider);
+
+        if (message == null) return const SizedBox();
+        return DecoratedBox(
+          decoration: BoxDecoration(
+            color: context.theme.popUp,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: QuoteMessage(
+                  quoteMessageId: message.messageId,
+                  message: message,
+                ),
+              ),
+              GestureDetector(
+                onTap: () =>
+                    ref.read(quoteMessageProvider.notifier).state = null,
+                behavior: HitTestBehavior.opaque,
+                child: Container(
+                  padding: const EdgeInsets.all(14),
+                  child: SvgPicture.asset(
+                    Resources.assetsImagesCloseOvalSvg,
+                    height: 22,
+                    width: 22,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      }),
+    );
+  }
 }
 
-class _ImagePickButton extends StatelessWidget {
-  const _ImagePickButton();
+class _SendActionTypeButton extends HookConsumerWidget {
+  const _SendActionTypeButton();
 
   @override
-  Widget build(BuildContext context) {
-    if (Platform.isMacOS || Platform.isLinux || Platform.isWindows) {
-      return const SizedBox();
-    }
+  Widget build(BuildContext context, WidgetRef ref) {
+    final isDesktop =
+        Platform.isMacOS || Platform.isLinux || Platform.isWindows;
+
+    final menuDisplayed = useState(false);
+
     return Padding(
       padding: const EdgeInsets.only(left: 6),
       child: ContextMenuPortalEntry(
-        interactiveForTap: true,
+        interactive: false,
+        showedMenu: (value) => Future(() {
+          menuDisplayed.value = value;
+        }),
         buildMenus: () => [
           ContextMenu(
-            icon: Resources.assetsImagesImageSvg,
-            title: context.l10n.image,
+            icon: Resources.assetsImagesContactSvg,
+            title: context.l10n.contact,
             onTap: () async {
-              final file =
-                  await ImagePicker().pickImage(source: ImageSource.gallery);
-              if (file != null) {
-                // recreate the XFile to generate mimeType.
-                final xFile = File(file.path).xFile;
-                await showFilesPreviewDialog(context, [xFile]);
-              }
+              final conversationState =
+                  context.providerContainer.read(conversationProvider);
+
+              if (conversationState == null) return;
+
+              final result = await showConversationSelector(
+                context: context,
+                singleSelect: true,
+                onlyContact: true,
+                title: context.l10n.select,
+                filteredIds: [conversationState.userId].nonNulls,
+              );
+
+              if (result == null || result.isEmpty) return;
+              final userId = result.first.userId;
+              if (userId == null || userId.isEmpty) return;
+
+              await runWithToast(() async {
+                final user = await context.database.userDao
+                    .userById(userId)
+                    .getSingleOrNull();
+                if (user == null) throw Exception('User not found');
+
+                final quoteMessage = ref.read(quoteMessageProvider.notifier);
+
+                await context.accountServer.sendContactMessage(
+                  userId,
+                  user.fullName,
+                  conversationState.encryptCategory,
+                  conversationId: conversationState.conversationId,
+                  recipientId: conversationState.userId,
+                  quoteMessageId: quoteMessage.state?.messageId,
+                );
+                quoteMessage.state = null;
+              });
             },
           ),
           ContextMenu(
-            icon: Resources.assetsImagesVideoSvg,
-            title: context.l10n.video,
+            icon: Resources.assetsImagesFileSvg,
+            title: context.l10n.files,
             onTap: () async {
-              final file =
-                  await ImagePicker().pickVideo(source: ImageSource.gallery);
-              if (file != null) {
-                // recreate the XFile to generate mimeType.
-                final xFile = File(file.path).xFile;
-                await showFilesPreviewDialog(context, [xFile]);
+              final files = await selectFiles();
+              if (files.isNotEmpty) {
+                await showFilesPreviewDialog(context, files);
               }
             },
           ),
+          if (isDesktop)
+            ContextMenu(
+              icon: Resources.assetsImagesFilePreviewImagesSvg,
+              title: context.l10n.picturesAndVideos,
+              onTap: () async {
+                final files = await selectFiles();
+                if (files.isNotEmpty) {
+                  await showFilesPreviewDialog(context, files);
+                }
+              },
+            ),
+          if (!isDesktop)
+            ContextMenu(
+              icon: Resources.assetsImagesImageSvg,
+              title: context.l10n.image,
+              onTap: () async {
+                final image =
+                    await ImagePicker().pickImage(source: ImageSource.gallery);
+                if (image == null) return;
+                await showFilesPreviewDialog(context, [image.withMineType()]);
+              },
+            ),
+          if (!isDesktop)
+            ContextMenu(
+              icon: Resources.assetsImagesVideoSvg,
+              title: context.l10n.video,
+              onTap: () async {
+                final video =
+                    await ImagePicker().pickVideo(source: ImageSource.gallery);
+                if (video == null) return;
+                await showFilesPreviewDialog(context, [video.withMineType()]);
+              },
+            ),
         ],
-        child: ActionButton(
-          name: Resources.assetsImagesFilePreviewImagesSvg,
-          color: context.theme.icon,
-          interactive: false,
+        child: _AnimatedSendTypeButton(menuDisplayed: menuDisplayed.value),
+      ),
+    );
+  }
+}
+
+class _AnimatedSendTypeButton extends StatelessWidget {
+  const _AnimatedSendTypeButton({
+    required this.menuDisplayed,
+  });
+
+  final bool menuDisplayed;
+
+  @override
+  Widget build(BuildContext context) {
+    final tween = MovieTween()
+      ..scene(
+        duration: 200.milliseconds,
+        curve: Curves.easeInOut,
+      ).tween('rotate', Tween<double>(begin: 0, end: math.pi / 4))
+      ..scene(
+        duration: 100.milliseconds,
+        curve: Curves.easeIn,
+        end: 100.milliseconds,
+      ).tween('scale', Tween<double>(begin: 1, end: 0.8))
+      ..scene(
+        duration: 100.milliseconds,
+        curve: Curves.easeOut,
+        begin: 100.milliseconds,
+      ).tween('scale', Tween<double>(begin: 0.8, end: 1));
+    return CustomAnimationBuilder(
+      duration: 200.milliseconds,
+      tween: tween,
+      control: menuDisplayed ? Control.play : Control.playReverse,
+      curve: Curves.easeInOut,
+      child: ActionButton(
+        name: Resources.assetsImagesIcAddSvg,
+        size: 32,
+        padding: const EdgeInsets.all(4),
+        onTapUp: (details) {
+          final renderBox = context.findRenderObject() as RenderBox?;
+          if (renderBox != null) {
+            final position =
+                renderBox.localToGlobal(renderBox.paintBounds.topCenter);
+            context.sendMenuPosition(position);
+          } else {
+            context.sendMenuPosition(details.globalPosition);
+          }
+        },
+        color: context.theme.icon,
+      ),
+      builder: (context, value, child) => Transform.scale(
+        scale: value.get('scale'),
+        child: Transform.rotate(
+          angle: value.get('rotate'),
+          child: child,
         ),
       ),
     );
   }
 }
 
-class _FileButton extends StatelessWidget {
-  const _FileButton({
-    required this.actionColor,
-  });
-
-  final Color actionColor;
-
-  @override
-  Widget build(BuildContext context) => ActionButton(
-        name: Resources.assetsImagesIcFileSvg,
-        color: actionColor,
-        onTap: () async {
-          final files = await selectFiles();
-          if (files.isEmpty) return;
-          await showFilesPreviewDialog(context, files);
-        },
-      );
-}
-
-class _StickerButton extends HookWidget {
+class _StickerButton extends HookConsumerWidget {
   const _StickerButton({
     required this.textEditingController,
   });
@@ -687,19 +764,21 @@ class _StickerButton extends HookWidget {
   final TextEditingController textEditingController;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final key = useMemoized(GlobalKey.new);
 
     final stickerAlbumsCubit = useBloc(
-      () => StickerAlbumsCubit(context.database.stickerAlbumDao
-          .systemAddedAlbums()
-          .watchThrottle(kVerySlowThrottleDuration)),
+      () => StickerAlbumsCubit(
+          context.database.stickerAlbumDao.systemAddedAlbums().watchWithStream(
+        eventStreams: [DataBaseEventBus.instance.updateStickerStream],
+        duration: kVerySlowThrottleDuration,
+      )),
     );
 
     final presetStickerGroups = useMemoized(
       () => [
         PresetStickerGroup.store,
-        if (!Platform.isLinux) PresetStickerGroup.emoji,
+        PresetStickerGroup.emoji,
         PresetStickerGroup.recent,
         PresetStickerGroup.favorite,
         if (giphyApiKey.isNotEmpty) PresetStickerGroup.gif,
@@ -716,7 +795,6 @@ class _StickerButton extends HookWidget {
     return MultiProvider(
       providers: [
         BlocProvider.value(value: stickerAlbumsCubit),
-        BlocProvider(create: (context) => EmojiScrollOffsetCubit()),
         ChangeNotifierProvider.value(value: textEditingController),
       ],
       child: DefaultTabController(
@@ -795,23 +873,53 @@ class _StickerPagePositionedLayoutDelegate extends SingleChildLayoutDelegate {
       position != oldDelegate.position;
 }
 
-class HighlightTextEditingController extends TextEditingController {
-  HighlightTextEditingController({
+class MentionTextMatcher extends TextMatcher implements EquatableMixin {
+  MentionTextMatcher(this.mentionCache, this.highlightTextStyle)
+      : super.regExp(
+          regExp: mentionNumberRegExp,
+          matchBuilder: (
+            span,
+            displayString,
+            linkString,
+          ) {
+            if (displayString != linkString) return TextSpan(text: linkString);
+
+            final identityNumber = linkString.substring(1);
+            final user = mentionCache.identityNumberCache(identityNumber);
+            final valid = user != null;
+
+            if (displayString != linkString) return TextSpan(text: linkString);
+
+            return TextSpan(
+              text: displayString,
+              style: valid
+                  ? (span.style ?? const TextStyle()).merge(highlightTextStyle)
+                  : span.style,
+            );
+          },
+        );
+
+  final MentionCache mentionCache;
+  final TextStyle highlightTextStyle;
+
+  @override
+  List<Object?> get props => [mentionCache, highlightTextStyle];
+
+  @override
+  bool? get stringify => true;
+}
+
+class _HighlightTextEditingController extends TextEditingController {
+  _HighlightTextEditingController({
     required this.highlightTextStyle,
-    String? initialText,
     required this.mentionCache,
+    String? initialText,
   }) : super(text: initialText) {
     mentionsStreamController.stream
-        .map((event) => mentionNumberRegExp
-            .allMatches(event)
-            .map((e) => e[1])
-            .whereNotNull()
-            .where(
-                (element) => mentionCache.identityNumberCache(element) == null)
-            .toSet())
-        .where((event) => event.isNotEmpty)
-        .distinct(setEquals)
-        .asyncMap(mentionCache.checkIdentityNumbers)
+        .distinct()
+        .asyncBufferMap(
+            (event) => mentionCache.checkMentionCache(event.toSet()))
+        .distinct(mapEquals)
         .listen((event) => notifyListeners());
   }
 
@@ -828,8 +936,8 @@ class HighlightTextEditingController extends TextEditingController {
   @override
   TextSpan buildTextSpan({
     required BuildContext context,
-    TextStyle? style,
     required bool withComposing,
+    TextStyle? style,
   }) {
     mentionsStreamController.add(text);
     if (!value.isComposingRangeValid || !withComposing) {
@@ -848,37 +956,15 @@ class HighlightTextEditingController extends TextEditingController {
     ]);
   }
 
-  TextSpan _buildTextSpan(String text, TextStyle? style) {
-    final children = <InlineSpan>[];
-    text.splitMapJoin(
-      mentionNumberRegExp,
-      onMatch: (match) {
-        final text = match[0];
-        final identityNumber = match[1];
-
-        final bool valid;
-        if (identityNumber != null) {
-          final user = mentionCache.identityNumberCache(identityNumber);
-          valid = user != null;
-        } else {
-          valid = false;
-        }
-
-        children.add(TextSpan(
-            text: text,
-            style: valid ? style?.merge(highlightTextStyle) : style));
-        return text ?? '';
-      },
-      onNonMatch: (text) {
-        children.add(TextSpan(text: text, style: style));
-        return text;
-      },
-    );
-    return TextSpan(
-      style: style,
-      children: children,
-    );
-  }
+  TextSpan _buildTextSpan(String text, TextStyle? style) => TextSpan(
+        style: style,
+        children: TextMatcher.applyTextMatchers([
+          TextSpan(text: text, style: style)
+        ], [
+          MentionTextMatcher(mentionCache, highlightTextStyle),
+          EmojiTextMatcher(),
+        ]).toList(),
+      );
 }
 
 class _SendMessageIntent extends Intent {

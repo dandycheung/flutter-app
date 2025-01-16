@@ -3,65 +3,79 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:mixin_bot_sdk_dart/mixin_bot_sdk_dart.dart';
 
 import '../../../../enum/media_status.dart';
 import '../../../../utils/extension/extension.dart';
-import '../../../../utils/hook.dart';
-import '../../../cache_image.dart';
 import '../../../image.dart';
 import '../../../interactive_decorated_box.dart';
+import '../../../mixin_image.dart';
 import '../../../status.dart';
 import '../../message.dart';
 import '../../message_bubble.dart';
 import '../../message_datetime_and_status.dart';
+import '../../message_style.dart';
+import '../post_message.dart';
+import '../text/text_message.dart';
 import '../transcript_message.dart';
 import '../unknown_message.dart';
 import 'image_preview_page.dart';
 
-class ImageMessageWidget extends HookWidget {
+class ImageMessageWidget extends HookConsumerWidget {
   const ImageMessageWidget({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final mediaWidth =
         useMessageConverter(converter: (state) => state.mediaWidth);
     final mediaHeight =
         useMessageConverter(converter: (state) => state.mediaHeight);
+    final caption = useMessageConverter(converter: (state) => state.caption);
 
     if (mediaWidth == null || mediaHeight == null) {
       return const UnknownMessage();
     }
 
+    final hasCaption = caption != null && caption.trim().isNotEmpty;
     return ImageMessageLayout(
       imageWidthInPixel: mediaWidth,
       imageHeightInPixel: mediaHeight,
       builder: (context, width, height) => MessageBubble(
-        showBubble: false,
+        showBubble: hasCaption,
         padding: EdgeInsets.zero,
-        includeNip: true,
+        includeNip: !hasCaption,
         clip: true,
-        child: MessageImage(
-          size: Size(width, height),
-          showStatus: true,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: width),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              MessageImage(
+                size: Size(width, height),
+                showStatus: !hasCaption,
+              ),
+              if (hasCaption) ImageCaption(caption: caption),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-class MessageImage extends HookWidget {
+class MessageImage extends HookConsumerWidget {
   const MessageImage({
+    required this.showStatus,
     super.key,
     this.size,
-    required this.showStatus,
   });
 
   final Size? size;
   final bool showStatus;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final isTranscriptPage = useIsTranscriptPage();
     final type = useMessageConverter(converter: (state) => state.type);
     final conversationId =
@@ -70,8 +84,6 @@ class MessageImage extends HookWidget {
     final thumbImage =
         useMessageConverter(converter: (state) => state.thumbImage ?? '');
     final mediaUrl = useMessageConverter(converter: (state) => state.mediaUrl);
-
-    final playing = useImagePlaying(context);
 
     final isUnDownloadGiphyGif = useMessageConverter(
       converter: (message) =>
@@ -82,9 +94,8 @@ class MessageImage extends HookWidget {
     final Widget thumbWidget;
     if (isUnDownloadGiphyGif) {
       // un-downloaded giphy gif image.
-      thumbWidget = CacheImage(
+      thumbWidget = MixinImage.network(
         thumbImage,
-        controller: playing,
         placeholder: () => ColoredBox(color: context.theme.secondaryText),
       );
     } else {
@@ -98,6 +109,25 @@ class MessageImage extends HookWidget {
             TranscriptPage.of(context)?.relationship == UserRelationship.me) ||
         (!isTranscriptPage && relationship == UserRelationship.me);
 
+    final mediaSize = useMessageConverter(
+        converter: (state) => (state.mediaWidth, state.mediaHeight));
+    final needShowExtendIcon = useMemoized(() {
+      if (size == null) {
+        return false;
+      }
+      final mediaWidth = mediaSize.$1 ?? 0;
+      final mediaHeight = mediaSize.$2 ?? 0;
+      if (mediaWidth == 0 || mediaHeight == 0) {
+        return false;
+      }
+      final mediaAspectRatio = mediaWidth / mediaHeight;
+      final layoutAspectRatio = size!.aspectRatio;
+      if (!layoutAspectRatio.isFinite || layoutAspectRatio == 0) {
+        return false;
+      }
+      return layoutAspectRatio - mediaAspectRatio > 0.01; // 0.01 is a threshold
+    }, [size]);
+
     return InteractiveDecoratedBox(
       onTap: () {
         final message = context.message;
@@ -109,7 +139,6 @@ class MessageImage extends HookWidget {
               messageId: message.messageId,
               isTranscriptPage: isTranscriptPage,
             );
-            break;
           case MediaStatus.canceled:
             if (message.mediaUrl?.isNotEmpty == true && isMessageSentOut) {
               if (isTranscriptPage) {
@@ -130,11 +159,9 @@ class MessageImage extends HookWidget {
             } else {
               context.accountServer.downloadAttachment(message.messageId);
             }
-            break;
           case MediaStatus.pending:
             context.accountServer
                 .cancelProgressAttachmentJob(message.messageId);
-            break;
           case null:
           case MediaStatus.expired:
           case MediaStatus.read:
@@ -146,13 +173,9 @@ class MessageImage extends HookWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            Image(
-              image: MixinFileImage(
-                File(context.accountServer.convertAbsolutePath(
-                    type, conversationId, mediaUrl, isTranscriptPage)),
-                controller: playing,
-              ),
-              fit: BoxFit.cover,
+            MixinImage.file(
+              File(context.accountServer.convertAbsolutePath(
+                  type, conversationId, mediaUrl, isTranscriptPage)),
               errorBuilder: (_, __, ___) => thumbWidget,
             ),
             Center(
@@ -198,6 +221,12 @@ class MessageImage extends HookWidget {
                   ),
                 ),
               ),
+            if (needShowExtendIcon)
+              Positioned(
+                top: 8,
+                right: isCurrentUser ? 16 : 8,
+                child: const PostDetailIcon(),
+              ),
           ],
         ),
       ),
@@ -217,10 +246,10 @@ typedef ImageLayoutBuilder = Widget Function(
 /// or too short.
 class ImageMessageLayout extends StatelessWidget {
   const ImageMessageLayout({
-    super.key,
     required this.builder,
     required this.imageWidthInPixel,
     required this.imageHeightInPixel,
+    super.key,
   })  : assert(imageHeightInPixel > 0),
         assert(imageWidthInPixel > 0);
 
@@ -235,15 +264,31 @@ class ImageMessageLayout extends StatelessWidget {
         final maxWidth = min(boxConstraints.maxWidth * 0.6, 300);
         final minWidth = max(boxConstraints.maxWidth * 0.2, 200);
         final width = max(
-                min(imageWidthInPixel / MediaQuery.of(context).devicePixelRatio,
+                min(imageWidthInPixel / MediaQuery.devicePixelRatioOf(context),
                     maxWidth),
                 minWidth)
             .toDouble();
         final aspectRatio = imageWidthInPixel / imageHeightInPixel;
         final height = min(
           width / aspectRatio,
-          MediaQuery.of(context).size.height * 2 / 3,
+          MediaQuery.sizeOf(context).height * 2 / 3,
         );
         return builder(context, width, height);
       });
+}
+
+class ImageCaption extends StatelessWidget {
+  const ImageCaption({required this.caption, super.key});
+
+  final String caption;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: MessageTextWidget(
+          color: context.theme.text,
+          fontSize: context.messageStyle.primaryFontSize,
+          content: caption,
+        ),
+      );
 }

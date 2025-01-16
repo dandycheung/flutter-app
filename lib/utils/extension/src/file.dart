@@ -16,10 +16,10 @@ extension FileExtension on File {
         name: basename(path),
       );
 
-  Future<String?> encodeBlurHash() async => _encodeBlurHash(path);
+  Future<String> encodeBlurHash() async => _encodeBlurHash(path);
 }
 
-Future<String?> _encodeBlurHash(String path) async {
+Future<String> _encodeBlurHash(String path) async {
   final fileImage = ResizeImage(FileImage(File(path)), width: 100, height: 100);
   final image = await fileImage.toImage();
   final data = Image.fromBytes(
@@ -39,6 +39,8 @@ extension XFileExtension on XFile {
         'image/gif',
       }.contains(mimeType?.toLowerCase());
 
+  bool get isGif => mimeType?.toLowerCase() == 'image/gif';
+
   bool get isVideo =>
       mimeType != null &&
       ([
@@ -48,6 +50,13 @@ extension XFileExtension on XFile {
             'video/webm',
           ].contains(mimeType?.toLowerCase()) ||
           {'mkv', 'avi'}.contains(extensionFromMime(mimeType!)));
+
+  bool get isStickerSupport => {
+        'image/gif',
+        'image/png',
+        'image/webp',
+        'image/jpeg',
+      }.contains(mimeType?.toLowerCase());
 
   XFile withMineType() => XFile(
         path,
@@ -64,6 +73,8 @@ extension FileRelativePath on File {
 
 extension StringPathRelativePath on String {
   String get pathBasename => basename(this);
+
+  String get pathBasenameWithoutExtension => basenameWithoutExtension(this);
 
   String get fileExtension => extension(this);
 }

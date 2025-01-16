@@ -10,12 +10,10 @@ import 'package:flutter/services.dart';
 import 'package:mixin_bot_sdk_dart/mixin_bot_sdk_dart.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:stream_channel/isolate_channel.dart';
-import 'package:tuple/tuple.dart';
 import 'package:uuid/uuid.dart';
 
 import '../blaze/blaze.dart';
 import '../blaze/vo/pin_message_minimal.dart';
-import '../bloc/setting_cubit.dart';
 import '../constants/constants.dart';
 import '../crypto/privacy_key_value.dart';
 import '../crypto/signal/signal_database.dart';
@@ -25,19 +23,19 @@ import '../db/dao/asset_dao.dart';
 import '../db/dao/sticker_album_dao.dart';
 import '../db/dao/sticker_dao.dart';
 import '../db/database.dart';
-import '../db/database_event_bus.dart';
 import '../db/extension/job.dart';
 import '../db/mixin_database.dart' as db;
 import '../enum/encrypt_category.dart';
 import '../enum/message_category.dart';
-import '../ui/home/bloc/multi_auth_cubit.dart';
+import '../ui/provider/account_server_provider.dart';
+import '../ui/provider/multi_auth_provider.dart';
+import '../ui/provider/setting_provider.dart';
 import '../utils/app_lifecycle.dart';
 import '../utils/attachment/attachment_util.dart';
 import '../utils/attachment/download_key_value.dart';
 import '../utils/extension/extension.dart';
 import '../utils/file.dart';
 import '../utils/hive_key_values.dart';
-import '../utils/load_balancer_utils.dart';
 import '../utils/logger.dart';
 import '../utils/mixin_api_client.dart';
 import '../utils/web_view/web_view_interface.dart';
@@ -49,19 +47,25 @@ import 'account_key_value.dart';
 import 'send_message_helper.dart';
 import 'show_pin_message_key_value.dart';
 
-String? lastInitErrorMessage;
-
 class AccountServer {
-  AccountServer(this.multiAuthCubit, this.settingCubit,
-      {this.userAgent, this.deviceId});
+  AccountServer({
+    required this.multiAuthNotifier,
+    required this.settingChangeNotifier,
+    required this.database,
+    required this.currentConversationId,
+    this.userAgent,
+    this.deviceId,
+  });
 
   static String? sid;
 
   set language(String language) =>
       client.dio.options.headers['Accept-Language'] = language;
 
-  final MultiAuthCubit multiAuthCubit;
-  final SettingCubit settingCubit;
+  final MultiAuthStateNotifier multiAuthNotifier;
+  final SettingChangeNotifier settingChangeNotifier;
+  final Database database;
+  final GetCurrentConversationId currentConversationId;
   Timer? checkSignalKeyTimer;
 
   bool get _loginByPhoneNumber =>
@@ -85,24 +89,7 @@ class AccountServer {
 
     await initKeyValues(identityNumber);
 
-    client = createClient(
-      userId: userId,
-      sessionId: sessionId,
-      privateKey: privateKey,
-      loginByPhoneNumber: _loginByPhoneNumber,
-      interceptors: [
-        InterceptorsWrapper(
-          onError: (
-            DioError e,
-            ErrorInterceptorHandler handler,
-          ) async {
-            await _onClientRequestError(e);
-            handler.next(e);
-          },
-        ),
-      ],
-    );
-    await _initDatabase();
+    await _initClient();
 
     checkSignalKeyTimer = Timer.periodic(const Duration(days: 1), (timer) {
       i('refreshSignalKeys periodic');
@@ -111,15 +98,20 @@ class AccountServer {
 
     try {
       await checkSignalKeys();
+    } on MixinApiError catch (e) {
+      final err = e.error;
+      if (err is MixinError && err.code == oldVersion) {
+        _isUpdateRequired.value = true;
+      }
+      return;
     } catch (e, s) {
-      lastInitErrorMessage = e.toString();
       w('$e, $s');
       await signOutAndClear();
-      multiAuthCubit.signOut();
-      return;
+      multiAuthNotifier.signOut();
+      rethrow;
     }
 
-    unawaited(start());
+    unawaited(_start());
 
     DownloadKeyValue.instance.messageIds.forEach((messageId) {
       attachmentUtil.downloadAttachment(messageId: messageId);
@@ -127,41 +119,62 @@ class AccountServer {
     appActiveListener.addListener(onActive);
   }
 
-  Future<void> _onClientRequestError(DioError e) async {
-    if (e is MixinApiError && (e.error! as MixinError).code == authentication) {
-      final serverTime =
-          int.tryParse(e.response?.headers.value('x-server-time') ?? '');
-      if (serverTime != null) {
-        final time = DateTime.fromMicrosecondsSinceEpoch(serverTime ~/ 1000);
-        final deviceTime =
-            e.requestOptions.extra[kRequestTimeStampKey] as DateTime?;
-        final difference = time.difference(deviceTime ?? DateTime.now());
-        if (difference.abs() >= const Duration(minutes: 5)) {
-          _notifyBlazeWaitSyncTime();
-          return;
+  final BehaviorSubject<bool> _isUpdateRequired = BehaviorSubject<bool>();
+
+  ValueStream<bool> get isUpdateRequired => _isUpdateRequired;
+
+  Future<void> _onClientRequestError(DioException e) async {
+    if (e is MixinApiError) {
+      final mixinError = e.error! as MixinError;
+      if (mixinError.code == authentication) {
+        final serverTime =
+            int.tryParse(e.response?.headers.value('x-server-time') ?? '');
+        if (serverTime != null) {
+          final time = DateTime.fromMicrosecondsSinceEpoch(serverTime ~/ 1000);
+          final deviceTime =
+              e.requestOptions.extra[kRequestTimeStampKey] as DateTime?;
+          final difference = time.difference(deviceTime ?? DateTime.now());
+          if (difference.abs() >= const Duration(minutes: 5)) {
+            _notifyBlazeWaitSyncTime();
+            return;
+          }
         }
+        await signOutAndClear();
+        multiAuthNotifier.signOut();
+      } else if (mixinError.code == oldVersion) {
+        _isUpdateRequired.value = true;
       }
-      await signOutAndClear();
-      multiAuthCubit.signOut();
     }
   }
 
   void onActive() {
-    if (!isAppActive || _activeConversationId == null) return;
-    markRead(_activeConversationId!);
+    final id = currentConversationId();
+    if (!isAppActive || id == null) return;
+    markRead(id);
   }
 
-  Future<void> _initDatabase() async {
-    database = Database(
-        await db.connectToDatabase(identityNumber, fromMainIsolate: true));
+  Future<void> _initClient() async {
+    client = createClient(
+      userId: userId,
+      sessionId: sessionId,
+      privateKey: privateKey,
+      loginByPhoneNumber: _loginByPhoneNumber,
+      interceptors: [
+        InterceptorsWrapper(
+          onError: (
+            DioException e,
+            ErrorInterceptorHandler handler,
+          ) async {
+            await _onClientRequestError(e);
+            handler.next(e);
+          },
+        ),
+      ],
+    )..configProxySetting(database.settingProperties);
 
-    attachmentUtil = AttachmentUtil.init(
-      client,
-      database.messageDao,
-      database.transcriptMessageDao,
-      identityNumber,
-    );
-    _sendMessageHelper = SendMessageHelper(database, attachmentUtil);
+    attachmentUtil = AttachmentUtil.init(client, database, identityNumber);
+    _sendMessageHelper =
+        SendMessageHelper(database, attachmentUtil, addSendingJob);
 
     _injector = Injector(userId, database, client);
   }
@@ -172,7 +185,6 @@ class AccountServer {
   late String privateKey;
 
   late Client client;
-  late Database database;
   late Injector _injector;
   late SendMessageHelper _sendMessageHelper;
   late AttachmentUtil attachmentUtil;
@@ -193,11 +205,9 @@ class AccountServer {
     _sendEventToWorkerIsolate(MainIsolateEventType.disconnectBlazeWithTime);
   }
 
-  String? _activeConversationId;
-
   final jobSubscribers = <StreamSubscription>{};
 
-  Future<void> start() async {
+  Future<void> _start() async {
     final receivePort = ReceivePort();
     _isolateChannel = IsolateChannel<dynamic>.connectReceive(receivePort);
     final exitReceivePort = ReceivePort();
@@ -244,25 +254,16 @@ class AccountServer {
     switch (event.type) {
       case WorkerIsolateEventType.onIsolateReady:
         d('message process service ready');
-        break;
       case WorkerIsolateEventType.onBlazeConnectStateChanged:
         _connectedStateBehaviorSubject.add(event.argument as ConnectedState);
-        break;
-      case WorkerIsolateEventType.onDbEvent:
-        final args = event.argument as Tuple2<DatabaseEvent, dynamic>;
-        database.mixinDatabase.eventBus.send(args.item1, args.item2);
-        break;
       case WorkerIsolateEventType.onApiRequestedError:
-        _onClientRequestError(event.argument as DioError);
-        break;
+        _onClientRequestError(event.argument as DioException);
       case WorkerIsolateEventType.requestDownloadAttachment:
         final request = event.argument as AttachmentRequest;
         _onAttachmentDownloadRequest(request);
-        break;
       case WorkerIsolateEventType.showPinMessage:
         final conversationId = event.argument as String;
         unawaited(ShowPinMessageKeyValue.instance.show(conversationId));
-        break;
     }
   }
 
@@ -272,11 +273,11 @@ class AccountServer {
   ) async {
     bool needDownload(String category) {
       if (category.isImage) {
-        return settingCubit.state.photoAutoDownload;
+        return settingChangeNotifier.photoAutoDownload;
       } else if (category.isVideo) {
-        return settingCubit.state.videoAutoDownload;
+        return settingChangeNotifier.videoAutoDownload;
       } else if (category.isData) {
-        return settingCubit.state.fileAutoDownload;
+        return settingChangeNotifier.fileAutoDownload;
       }
       return true;
     }
@@ -314,13 +315,28 @@ class AccountServer {
 
   Future<void> signOutAndClear() async {
     _sendEventToWorkerIsolate(MainIsolateEventType.exit);
-    await client.accountApi.logout(LogoutRequest(sessionId));
+    try {
+      await client.accountApi.logout(LogoutRequest(sessionId));
+    } catch (error, stacktrace) {
+      e('logout api error: $error, $stacktrace');
+    }
     await Future.wait(jobSubscribers.map((s) => s.cancel()));
     jobSubscribers.clear();
+
     await clearKeyValues();
-    await SignalDatabase.get.clear();
-    await database.participantSessionDao.deleteBySessionId(sessionId);
-    await database.participantSessionDao.updateSentToServer();
+
+    try {
+      await SignalDatabase.get.clear();
+    } catch (_) {
+      // ignore closed database error
+    }
+
+    try {
+      await database.participantSessionDao.deleteBySessionId(sessionId);
+      await database.participantSessionDao.updateSentToServer();
+    } catch (_) {
+      // ignore closed database error
+    }
 
     MixinWebView.instance.clearWebViewCacheAndCookies();
   }
@@ -388,6 +404,9 @@ class AccountServer {
     String? conversationId,
     String? recipientId,
     String? quoteMessageId,
+    bool silent = false,
+    bool compress = false,
+    String? caption,
   }) async =>
       _sendMessageHelper.sendImageMessage(
         conversationId: await _initConversation(conversationId, recipientId),
@@ -397,21 +416,37 @@ class AccountServer {
         category: encryptCategory.toCategory(MessageCategory.plainImage,
             MessageCategory.signalImage, MessageCategory.encryptedImage),
         quoteMessageId: quoteMessageId,
+        silent: silent,
+        compress: compress,
+        caption: caption,
       );
 
-// NOTE: Send video as DataMessage, cause we can not retriever video metadata
-// from video file.
-  Future<void> sendVideoMessage(XFile video, EncryptCategory encryptCategory,
-          {String? conversationId,
-          String? recipientId,
-          String? quoteMessageId}) async =>
-      _sendMessageHelper.sendDataMessage(
-          await _initConversation(conversationId, recipientId),
-          userId,
-          video,
-          encryptCategory.toCategory(MessageCategory.plainData,
-              MessageCategory.signalData, MessageCategory.encryptedData),
-          quoteMessageId);
+  Future<void> sendVideoMessage(
+    XFile video,
+    EncryptCategory encryptCategory, {
+    required int mediaWidth,
+    required int mediaHeight,
+    required String thumbImage,
+    required String mediaDuration,
+    String? conversationId,
+    String? recipientId,
+    String? quoteMessageId,
+    bool silent = false,
+  }) async {
+    await _sendMessageHelper.sendVideoMessage(
+      await _initConversation(conversationId, recipientId),
+      userId,
+      video,
+      encryptCategory.toCategory(MessageCategory.plainVideo,
+          MessageCategory.signalVideo, MessageCategory.encryptedVideo),
+      quoteMessageId,
+      silent: silent,
+      mediaDuration: mediaDuration,
+      mediaHeight: mediaHeight,
+      mediaWidth: mediaWidth,
+      thumbImage: thumbImage,
+    );
+  }
 
   Future<void> sendAudioMessage(
     XFile audio,
@@ -433,17 +468,23 @@ class AccountServer {
         mediaWaveform: waveform,
       );
 
-  Future<void> sendDataMessage(XFile file, EncryptCategory encryptCategory,
-          {String? conversationId,
-          String? recipientId,
-          String? quoteMessageId}) async =>
+  Future<void> sendDataMessage(
+    XFile file,
+    EncryptCategory encryptCategory, {
+    String? conversationId,
+    String? recipientId,
+    String? quoteMessageId,
+    bool silent = false,
+  }) async =>
       _sendMessageHelper.sendDataMessage(
-          await _initConversation(conversationId, recipientId),
-          userId,
-          file,
-          encryptCategory.toCategory(MessageCategory.plainData,
-              MessageCategory.signalData, MessageCategory.encryptedData),
-          quoteMessageId);
+        await _initConversation(conversationId, recipientId),
+        userId,
+        file,
+        encryptCategory.toCategory(MessageCategory.plainData,
+            MessageCategory.signalData, MessageCategory.encryptedData),
+        quoteMessageId,
+        silent: silent,
+      );
 
   Future<void> sendStickerMessage(
     String stickerId,
@@ -459,11 +500,14 @@ class AccountServer {
           encryptCategory.toCategory(MessageCategory.plainSticker,
               MessageCategory.signalSticker, MessageCategory.encryptedSticker));
 
-  Future<void> sendContactMessage(String shareUserId, String? shareUserFullName,
-      EncryptCategory encryptCategory,
-      {String? conversationId,
-      String? recipientId,
-      String? quoteMessageId}) async {
+  Future<void> sendContactMessage(
+    String shareUserId,
+    String? shareUserFullName,
+    EncryptCategory encryptCategory, {
+    String? conversationId,
+    String? recipientId,
+    String? quoteMessageId,
+  }) async {
     final fullName = shareUserFullName ??
         (await database.userDao.userById(shareUserId).getSingleOrNull())
             ?.fullName;
@@ -478,14 +522,17 @@ class AccountServer {
   }
 
   Future<void> sendRecallMessage(List<String> messageIds,
-          {String? conversationId, String? recipientId}) async =>
-      _sendMessageHelper.sendRecallMessage(
-          await _initConversation(conversationId, recipientId), messageIds);
+      {String? conversationId, String? recipientId}) async {
+    await Future.forEach(
+        messageIds, (id) => attachmentUtil.cancelProgressAttachmentJob(id));
+    return _sendMessageHelper.sendRecallMessage(
+        await _initConversation(conversationId, recipientId), messageIds);
+  }
 
   Future<void> sendAppCardMessage({
+    required AppCardData data,
     String? conversationId,
     String? recipientId,
-    required AppCardData data,
   }) async =>
       _sendMessageHelper.sendAppCardMessage(
         await _initConversation(conversationId, recipientId),
@@ -592,32 +639,89 @@ class AccountServer {
       );
 
   void selectConversation(String? conversationId) {
-    _activeConversationId = conversationId;
     _sendEventToWorkerIsolate(
       MainIsolateEventType.updateSelectedConversation,
       conversationId,
     );
   }
 
+  void addAckJob(List<db.Job> jobs) {
+    assert(jobs.every((job) => job.action == kAcknowledgeMessageReceipts));
+    _sendEventToWorkerIsolate(
+      MainIsolateEventType.addAckJobs,
+      jobs,
+    );
+  }
+
+  void addSessionAckJob(List<db.Job> jobs) {
+    assert(jobs.every((job) => job.action == kCreateMessage));
+    _sendEventToWorkerIsolate(
+      MainIsolateEventType.addSessionAckJobs,
+      jobs,
+    );
+  }
+
+  void addSendingJob(db.Job job) {
+    assert(job.action == kSendingMessage ||
+        job.action == kPinMessage ||
+        job.action == kRecallMessage);
+    _sendEventToWorkerIsolate(
+      MainIsolateEventType.addSendingJob,
+      job,
+    );
+  }
+
+  void addUpdateAssetJob(db.Job job) {
+    assert(job.action == kUpdateAsset);
+    _sendEventToWorkerIsolate(
+      MainIsolateEventType.addUpdateAssetJob,
+      job,
+    );
+  }
+
+  void addUpdateTokenJob(db.Job job) {
+    assert(job.action == kUpdateToken);
+    _sendEventToWorkerIsolate(
+      MainIsolateEventType.addUpdateTokenJob,
+      job,
+    );
+  }
+
+  void addUpdateStickerJob(db.Job job) {
+    assert(job.action == kUpdateSticker);
+    _sendEventToWorkerIsolate(
+      MainIsolateEventType.addUpdateStickerJob,
+      job,
+    );
+  }
+
+  void addSyncInscriptionMessageJob(String messageId) {
+    _sendEventToWorkerIsolate(
+      MainIsolateEventType.addSyncInscriptionMessageJob,
+      createSyncInscriptionMessageJob(messageId),
+    );
+  }
+
   Future<void> markRead(String conversationId) async {
-    while (true) {
-      final ids = await database.messageDao
-          .getUnreadMessageIds(conversationId, userId, kMarkLimit);
-      if (ids.isEmpty) return;
+    final ids =
+        await database.messageDao.getUnreadMessageIds(conversationId, userId);
+
+    if (ids.isEmpty) return;
+
+    final chunked = ids.chunked(kMarkLimit);
+
+    for (final ids in chunked) {
       final expireAt = await database.expiredMessageDao.getMessageExpireAt(ids);
-      final jobs = ids
-          .map(
-            (id) => createAckJob(
-              kAcknowledgeMessageReceipts,
-              id,
-              MessageStatus.read,
-              expireAt: expireAt[id],
-            ),
-          )
-          .toList();
-      await database.jobDao.insertAll(jobs);
+      addAckJob(ids
+          .map((id) => createAckJob(
+                kAcknowledgeMessageReceipts,
+                id,
+                MessageStatus.read,
+                expireAt: expireAt[id],
+              ))
+          .toList());
+
       await _createReadSessionMessage(ids, expireAt);
-      if (ids.length < kMarkLimit) return;
     }
   }
 
@@ -629,22 +733,21 @@ class AccountServer {
     if (primarySessionId == null) {
       return;
     }
-    final jobs = messageIds
+
+    addSessionAckJob(messageIds
         .map((id) => createAckJob(
               kCreateMessage,
               id,
               MessageStatus.read,
               expireAt: messageExpireAt[id],
             ))
-        .toList();
-    await database.jobDao.insertAll(jobs);
+        .toList());
   }
 
   Future<void> stop() async {
     appActiveListener.removeListener(onActive);
     checkSignalKeyTimer?.cancel();
     _sendEventToWorkerIsolate(MainIsolateEventType.exit);
-    await database.dispose();
   }
 
   void release() {
@@ -656,8 +759,7 @@ class AccountServer {
     await database.userDao.insert(db.User(
       userId: me.userId,
       identityNumber: me.identityNumber,
-      relationship:
-          const UserRelationshipJsonConverter().fromJson(me.relationship),
+      relationship: me.relationship,
       fullName: me.fullName,
       avatarUrl: me.avatarUrl,
       phone: me.phone,
@@ -668,8 +770,9 @@ class AccountServer {
       isScam: me.isScam ? 1 : 0,
       codeId: me.codeId,
       codeUrl: me.codeUrl,
+      membership: me.membership,
     ));
-    multiAuthCubit.updateAccount(me);
+    multiAuthNotifier.updateAccount(me);
   }
 
   Future<void> refreshFriends() async {
@@ -755,6 +858,19 @@ class AccountServer {
     });
 
     AccountKeyValue.instance.hasSyncCircle = true;
+  }
+
+  Future<void> _cleanupQuoteContent() async {
+    final clean = AccountKeyValue.instance.alreadyCleanupQuoteContent;
+    if (clean) {
+      return;
+    }
+    await database.jobDao.insert(createCleanupQuoteContentJob());
+    AccountKeyValue.instance.alreadyCleanupQuoteContent = true;
+  }
+
+  Future<void> checkMigration() async {
+    await _cleanupQuoteContent();
   }
 
   Future<void> handleCircle(CircleResponse circle, {int? offset}) async {
@@ -1011,7 +1127,7 @@ class AccountServer {
           conversationId: conversationId,
           userId: userId)
     ]);
-    await database.circleConversationDao.deleteByIds(conversationId, circleId);
+    await database.circleConversationDao.deleteById(conversationId, circleId);
   }
 
   Future<void> editCircleConversation(
@@ -1184,21 +1300,8 @@ class AccountServer {
   Future<void> markMentionRead(String messageId, String conversationId) =>
       Future.wait([
         database.messageMentionDao.markMentionRead(messageId),
-        (() async => database.jobDao.insert(
-              db.Job(
-                jobId: const Uuid().v4(),
-                action: kCreateMessage,
-                createdAt: DateTime.now(),
-                conversationId: conversationId,
-                runCount: 0,
-                priority: 5,
-                blazeMessage: await jsonEncodeWithIsolate(BlazeAckMessage(
-                  messageId: messageId,
-                  status: 'MENTION_READ',
-                  expireAt: null,
-                )),
-              ),
-            ))()
+        (() async => addSessionAckJob(
+            [await createMentionReadAckJob(conversationId, messageId)]))()
       ]);
 
   Future<List<db.User>?> refreshUsers(List<String> ids, {bool force = false}) =>
@@ -1216,7 +1319,7 @@ class AccountServer {
       fullName: fullName,
       biography: biography,
     ));
-    multiAuthCubit.updateAccount(user.data);
+    multiAuthNotifier.updateAccount(user.data);
   }
 
   Future<bool> cancelProgressAttachmentJob(String messageId) =>
@@ -1254,12 +1357,46 @@ class AccountServer {
     }
   }
 
+  Future<void> _deleteMessageAttachmentByConversationId(
+      String conversationId) async {
+    final directories = [
+      attachmentUtil.getImagesPath(conversationId),
+      attachmentUtil.getVideosPath(conversationId),
+      attachmentUtil.getAudiosPath(conversationId),
+      attachmentUtil.getFilesPath(conversationId),
+    ];
+
+    await Future.wait(directories.map((dir) async {
+      final directory = Directory(dir);
+      if (!directory.existsSync()) return;
+      await directory.delete(recursive: true);
+    }));
+  }
+
   Future<void> deleteMessage(String messageId) async {
     final message = await database.messageDao.findMessageByMessageId(messageId);
     if (message == null) return;
+    await attachmentUtil.cancelProgressAttachmentJob(messageId);
     await database.messageDao.deleteMessage(message.conversationId, messageId);
-
+    unawaited(database.ftsDatabase.deleteByMessageId(messageId));
     unawaited(_deleteMessageAttachment(message));
+  }
+
+  Future<void> deleteMessagesByConversationId(String conversationId) async {
+    final miniMessageIds = await database.messageDao
+        .miniMessageByIds(attachmentUtil.downloadingIds.toList())
+        .get();
+    await Future.forEach(
+        miniMessageIds
+            .where((message) => message.conversationId == conversationId),
+        (message) =>
+            attachmentUtil.cancelProgressAttachmentJob(message.messageId));
+
+    await database.messageDao.deleteMessagesByConversationId(conversationId);
+    await database.messageMentionDao
+        .clearMessageMentionByConversationId(conversationId);
+    unawaited(database.ftsDatabase.deleteByConversationId(conversationId));
+    unawaited(_deleteMessageAttachmentByConversationId(conversationId));
   }
 
   String convertAbsolutePath(
@@ -1309,6 +1446,11 @@ class AccountServer {
     await database.snapshotDao.insertSdkSnapshot(data.data);
   }
 
+  Future<void> updateSafeSnapshotById({required String snapshotId}) async {
+    final data = await client.tokenApi.getSnapshotById(snapshotId);
+    await database.safeSnapshotDao.insertSdkSnapshot(data.data);
+  }
+
   Future<Snapshot> updateSnapshotByTraceId({required String traceId}) async {
     final data = await client.snapshotApi.getSnapshotByTraceId(traceId);
     final snapshot = data.data;
@@ -1316,21 +1458,33 @@ class AccountServer {
     return snapshot;
   }
 
-  Future<void> updateAssetById({required String assetId}) =>
-      database.jobDao.insertUpdateAssetJob(assetId);
+  void updateAssetById({required String assetId}) =>
+      addUpdateAssetJob(createUpdateAssetJob(assetId));
 
-  Future<AssetItem?> checkAsset({required String assetId}) async {
+  void updateTokenById({required String assetId}) =>
+      addUpdateTokenJob(createUpdateTokenJob(assetId));
+
+  Future<AssetItem?> checkAsset(
+      {required String assetId, bool force = false}) async {
     final asset = await database.assetDao.findAssetById(assetId);
-    if (asset == null) {
+    if (force || asset == null) {
       try {
         final a = (await client.assetApi.getAssetById(assetId)).data;
-        await database.assetDao.insertSdkAsset(a);
-        await checkAsset(assetId: a.chainId);
+        final chain = (await client.assetApi.getChain(a.chainId)).data;
+
+        await Future.wait([
+          database.assetDao.insertSdkAsset(a),
+          database.chainDao.insertSdkChain(chain),
+        ]);
       } catch (error, stacktrace) {
         e('checkAsset: $error $stacktrace');
       }
-    } else if (assetId != asset.chainId) {
-      await checkAsset(assetId: asset.chainId);
+    } else {
+      final chain =
+          await database.chainDao.chain(asset.chainId).getSingleOrNull();
+      if (chain == null) {
+        await checkAsset(assetId: assetId, force: true);
+      }
     }
     return database.assetDao.assetItem(assetId).getSingleOrNull();
   }
@@ -1340,11 +1494,20 @@ class AccountServer {
     await database.fiatDao.insertAllSdkFiat(data.data);
   }
 
+  Future<db.App?> findOrSyncApp(String id) async =>
+      getAppAndCheckUser(id, null);
+
   Future<db.App?> getAppAndCheckUser(String id, DateTime? updatedAt) async {
     final app = await database.appDao.findAppById(id);
-    if (app?.updatedAt != null && app?.updatedAt == updatedAt) {
-      return app;
+
+    if (app != null) {
+      if (updatedAt == null) {
+        return app;
+      } else if (app.updatedAt == updatedAt) {
+        return app;
+      }
     }
+
     try {
       final user = await client.userApi.getUserById(id);
       await _injector.insertUpdateUsers([user.data]);
@@ -1379,10 +1542,14 @@ class AccountServer {
   }
 
   void _sendEventToWorkerIsolate(MainIsolateEventType type, [dynamic args]) {
-    if (_isolateChannel == null) {
-      d('_sendEventToWorkerIsolate: _isolateChannel is null $type');
-      assert(type == MainIsolateEventType.exit);
+    try {
+      if (_isolateChannel == null) {
+        d('_sendEventToWorkerIsolate: _isolateChannel is null $type');
+        assert(type == MainIsolateEventType.exit);
+      }
+      _isolateChannel?.sink.add(type.toEvent(args));
+    } catch (error, s) {
+      e('_sendEventToWorkerIsolate: $error, $s');
     }
-    _isolateChannel?.sink.add(type.toEvent(args));
   }
 }

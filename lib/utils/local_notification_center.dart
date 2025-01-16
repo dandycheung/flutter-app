@@ -6,7 +6,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:mixin_bot_sdk_dart/mixin_bot_sdk_dart.dart';
 import 'package:rxdart/rxdart.dart';
-import 'package:tuple/tuple.dart';
+
 import 'package:win_toast/win_toast.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -26,18 +26,18 @@ class Notification {
 }
 
 abstract class _NotificationManager {
-  final _payloadStreamController = BehaviorSubject<Uri>();
+  final _payloadStreamController = BehaviorSubject<Uri?>();
   final List<Notification> notifications = [];
 
   Future<void> initialize();
 
   Future<void> showNotification({
     required String title,
-    String? body,
     required Uri uri,
     required int id,
     required String conversationId,
     required String messageId,
+    String? body,
   });
 
   Future<void> dismissByConversationId(String conversationId);
@@ -51,6 +51,7 @@ abstract class _NotificationManager {
 
   Stream<Uri> notificationActionEvent(NotificationScheme notificationScheme) =>
       _payloadStreamController.stream
+          .whereNotNull()
           .where((e) => e.scheme == enumConvertToString(notificationScheme));
 }
 
@@ -64,11 +65,7 @@ class _LocalNotificationManager extends _NotificationManager {
 
   @override
   Future<void> initialize() async {
-    final darwinInitializationSettings = DarwinInitializationSettings(
-        onDidReceiveLocalNotification:
-            (int id, String? title, String? body, String? payload) {
-      i('onDidReceiveLocalNotification: $id');
-    });
+    const darwinInitializationSettings = DarwinInitializationSettings();
 
     final initializationSettings = InitializationSettings(
       iOS: darwinInitializationSettings,
@@ -87,11 +84,11 @@ class _LocalNotificationManager extends _NotificationManager {
   @override
   Future<void> showNotification({
     required String title,
-    String? body,
     required Uri uri,
     required int id,
     required String conversationId,
     required String messageId,
+    String? body,
   }) async {
     await requestPermission();
 
@@ -115,7 +112,7 @@ class _LocalNotificationManager extends _NotificationManager {
     notifications.add(Notification(
       conversationId: conversationId,
       messageId: messageId,
-      notification: Tuple2(uri, id),
+      notification: (uri, id),
     ));
   }
 
@@ -137,8 +134,7 @@ class _LocalNotificationManager extends _NotificationManager {
 
     final notification = notifications.cast<Notification?>().firstWhere(
         (element) =>
-            element != null &&
-            (element.notification as Tuple2<Uri, int>).item1 == uri,
+            element != null && (element.notification as (Uri, int)).$1 == uri,
         orElse: () => null);
     if (notification != null) notifications.remove(notification);
 
@@ -154,7 +150,7 @@ class _LocalNotificationManager extends _NotificationManager {
     final list = await Future.wait(notifications
         .where((element) => element.conversationId == conversationId)
         .map((e) async {
-      final id = (e.notification as Tuple2<Uri, int>).item2;
+      final (_, id) = e.notification as (Uri, int);
       await flutterLocalNotificationsPlugin.cancel(id);
       return e;
     }));
@@ -168,7 +164,7 @@ class _LocalNotificationManager extends _NotificationManager {
         (element) => element?.messageId == messageId,
         orElse: () => null);
     if (notification == null) return;
-    final id = (notification.notification as Tuple2<Uri, int>).item2;
+    final (_, id) = notification.notification as (Uri, int);
     await flutterLocalNotificationsPlugin.cancel(id);
     notifications.remove(notification);
   }
@@ -200,11 +196,11 @@ class _WindowsNotificationManager extends _NotificationManager {
   @override
   Future<void> showNotification({
     required String title,
-    String? body,
     required Uri uri,
     required int id,
     required String conversationId,
     required String messageId,
+    String? body,
   }) async {
     await WinToast.instance().showToast(
       toast: Toast(
@@ -273,6 +269,10 @@ Stream<Uri> notificationSelectEvent(NotificationScheme notificationScheme) =>
     _notificationManager?.notificationActionEvent(notificationScheme) ??
     const Stream.empty();
 
+void clearNotificationEvent() {
+  _notificationManager?._payloadStreamController.add(null);
+}
+
 int _incrementAndGetId() {
   _id++;
   // id should be fit within the size of a 32-bit integer in flutter_local_notifications.
@@ -284,10 +284,10 @@ int _incrementAndGetId() {
 
 Future<void> showNotification({
   required String title,
-  String? body,
   required Uri uri,
   required String conversationId,
   required String messageId,
+  String? body,
 }) async =>
     await _notificationManager?.showNotification(
       title: title,

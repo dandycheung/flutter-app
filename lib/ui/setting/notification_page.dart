@@ -3,8 +3,8 @@ import 'dart:io';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 
-import '../../bloc/setting_cubit.dart';
 import '../../utils/app_lifecycle.dart';
 import '../../utils/extension/extension.dart';
 import '../../utils/hook.dart';
@@ -13,16 +13,15 @@ import '../../utils/uri_utils.dart';
 import '../../widgets/animated_visibility.dart';
 import '../../widgets/app_bar.dart';
 import '../../widgets/cell.dart';
+import '../provider/setting_provider.dart';
 
-class NotificationPage extends HookWidget {
+class NotificationPage extends HookConsumerWidget {
   const NotificationPage({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final currentMessagePreview =
-        useBlocStateConverter<SettingCubit, SettingState, bool>(
-      converter: (style) => style.messagePreview,
-    );
+        ref.watch(settingProvider.select((value) => value.messagePreview));
 
     final appActive = useValueListenable(appActiveListener);
     final hasNotificationPermission = useMemoizedFuture(
@@ -42,19 +41,16 @@ class NotificationPage extends HookWidget {
           children: [
             CellGroup(
               padding: const EdgeInsets.only(right: 10, left: 10),
-              cellBackgroundColor: context.dynamicColor(
-                Colors.white,
-                darkColor: const Color.fromRGBO(255, 255, 255, 0.06),
-              ),
+              cellBackgroundColor: context.theme.settingCellBackgroundColor,
               child: CellItem(
                 title: Text(context.l10n.messagePreview),
                 trailing: Transform.scale(
                   scale: 0.7,
                   child: CupertinoSwitch(
-                    activeColor: context.theme.accent,
+                    activeTrackColor: context.theme.accent,
                     value: currentMessagePreview,
                     onChanged: (bool value) =>
-                        context.settingCubit.messagePreview = value,
+                        context.settingChangeNotifier.messagePreview = value,
                   ),
                 ),
               ),
@@ -78,12 +74,10 @@ class NotificationPage extends HookWidget {
                   children: [
                     CellGroup(
                       padding: const EdgeInsets.only(right: 10, left: 10),
-                      cellBackgroundColor: context.dynamicColor(
-                        Colors.white,
-                        darkColor: const Color.fromRGBO(255, 255, 255, 0.06),
-                      ),
+                      cellBackgroundColor:
+                          context.theme.settingCellBackgroundColor,
                       child: CellItem(
-                        title: Text(context.l10n.turnOnNotifications),
+                        title: Text(context.l10n.enablePushNotification),
                         onTap: () => openUri(context,
                             'x-apple.systempreferences:com.apple.preference.notifications'),
                       ),

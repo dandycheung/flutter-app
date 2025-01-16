@@ -68,7 +68,7 @@ class _PinVerificationDialog extends StatelessWidget {
 const _kPinCodeLength = 6;
 
 class PinInputLayout extends StatefulWidget {
-  const PinInputLayout({super.key, required this.doVerify});
+  const PinInputLayout({required this.doVerify, super.key});
 
   final Future<void> Function(String pinCode) doVerify;
 
@@ -304,5 +304,10 @@ class _PinInputLayoutState extends State<PinInputLayout>
   @override
   void showToolbar() {
     // TODO: implement showToolbar
+  }
+
+  @override
+  void insertContent(KeyboardInsertedContent content) {
+    // TODO: implement insertContent
   }
 }

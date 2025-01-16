@@ -1,20 +1,22 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:mixin_bot_sdk_dart/mixin_bot_sdk_dart.dart' hide User;
 
+import '../../db/dao/conversation_dao.dart';
+import '../../db/database_event_bus.dart';
 import '../../db/mixin_database.dart';
 import '../../utils/color_utils.dart';
 import '../../utils/extension/extension.dart';
 import '../../utils/hook.dart';
-import '../cache_image.dart';
+import '../mixin_image.dart';
 
-class ConversationAvatarWidget extends HookWidget {
+class ConversationAvatarWidget extends HookConsumerWidget {
   const ConversationAvatarWidget({
+    required this.size,
     super.key,
     this.conversation,
-    required this.size,
     this.conversationId,
     this.userId,
     this.fullName,
@@ -33,7 +35,7 @@ class ConversationAvatarWidget extends HookWidget {
   final double size;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final _conversationId = conversation?.conversationId ?? conversationId;
     assert(_conversationId != null);
     final _name = conversation?.name ?? fullName;
@@ -49,13 +51,13 @@ class ConversationAvatarWidget extends HookWidget {
             if (_category == ConversationCategory.group) {
               return context.database.participantDao
                   .participantsAvatar(_conversationId!)
-                  .watchThrottle(const Duration(minutes: 6))
-                  .map((event) => _category == ConversationCategory.contact
-                      ? event
-                          .where((element) =>
-                              element.relationship != UserRelationship.me)
-                          .toList()
-                      : event);
+                  .watchWithStream(
+                eventStreams: [
+                  DataBaseEventBus.instance.watchUpdateParticipantStream(
+                      conversationIds: [_conversationId])
+                ],
+                duration: kVerySlowThrottleDuration * 2,
+              );
             }
             return const Stream<List<User>>.empty();
           },
@@ -64,31 +66,29 @@ class ConversationAvatarWidget extends HookWidget {
         ).data ??
         <User>[];
 
-    final child = _category == ConversationCategory.contact
-        ? AvatarWidget(
-            userId: _userId,
-            name: _name,
-            avatarUrl: _groupIconUrl ?? _avatarUrl ?? '',
-            size: size)
-        : AvatarPuzzlesWidget(list, size);
-
     return SizedBox.fromSize(
       size: Size.square(size),
       child: ClipOval(
-        child: child,
+        child: _category == ConversationCategory.contact
+            ? AvatarWidget(
+                userId: _userId,
+                name: _name,
+                avatarUrl: _avatarUrl ?? _groupIconUrl ?? '',
+                size: size)
+            : AvatarPuzzlesWidget(list, size),
       ),
     );
   }
 }
 
-class AvatarPuzzlesWidget extends HookWidget {
+class AvatarPuzzlesWidget extends HookConsumerWidget {
   const AvatarPuzzlesWidget(this.users, this.size, {super.key});
 
   final List<User> users;
   final double size;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     if (users.isEmpty) return SizedBox.fromSize(size: Size.square(size));
     switch (users.length) {
       case 1:
@@ -150,12 +150,12 @@ class AvatarPuzzlesWidget extends HookWidget {
 
 class AvatarWidget extends StatelessWidget {
   const AvatarWidget({
-    super.key,
     required this.size,
-    this.clipOval = true,
     required this.avatarUrl,
     required this.userId,
     required this.name,
+    super.key,
+    this.clipOval = true,
   });
 
   final String? avatarUrl;
@@ -190,12 +190,12 @@ class AvatarWidget extends StatelessWidget {
     );
 
     final child = avatarUrl?.isNotEmpty == true
-        ? CacheImage(
+        ? MixinImage.network(
             avatarUrl!,
             width: size,
             height: size,
             placeholder: () => placeholder,
-            errorWidget: () => placeholder,
+            errorBuilder: (_, __, ___) => placeholder,
           )
         : placeholder;
 

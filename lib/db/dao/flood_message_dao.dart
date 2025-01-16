@@ -4,7 +4,7 @@ import '../mixin_database.dart';
 
 part 'flood_message_dao.g.dart';
 
-@DriftAccessor(tables: [FloodMessages])
+@DriftAccessor(include: {'../moor/dao/flood.drift'})
 class FloodMessageDao extends DatabaseAccessor<MixinDatabase>
     with _$FloodMessageDaoMixin {
   FloodMessageDao(super.db);
@@ -15,7 +15,7 @@ class FloodMessageDao extends DatabaseAccessor<MixinDatabase>
   Future deleteFloodMessage(FloodMessage message) =>
       delete(db.floodMessages).delete(message);
 
-  SimpleSelectStatement<FloodMessages, FloodMessage> findFloodMessage() =>
+  SimpleSelectStatement<FloodMessages, FloodMessage> floodMessage() =>
       select(db.floodMessages)
         ..orderBy([(u) => OrderingTerm(expression: u.createdAt)])
         ..limit(10);
@@ -33,5 +33,5 @@ class FloodMessageDao extends DatabaseAccessor<MixinDatabase>
   }
 
   Future<DateTime?> getLastBlazeMessageCreatedAt() =>
-      db.getLastBlazeMessageCreatedAt().getSingleOrNull();
+      _getLastBlazeMessageCreatedAt().getSingleOrNull();
 }

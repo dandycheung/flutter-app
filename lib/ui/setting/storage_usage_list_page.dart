@@ -1,24 +1,23 @@
 import 'package:filesize/filesize.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
-import 'package:rxdart/rxdart.dart';
-import 'package:tuple/tuple.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:watcher/watcher.dart';
 
+import '../../db/dao/conversation_dao.dart';
 import '../../db/extension/conversation.dart';
-import '../../db/mixin_database.dart';
 import '../../utils/extension/extension.dart';
 import '../../utils/hook.dart';
 import '../../widgets/app_bar.dart';
 import '../../widgets/avatar_view/avatar_view.dart';
 import '../../widgets/cell.dart';
-import '../home/route/responsive_navigator_cubit.dart';
+import '../provider/responsive_navigator_provider.dart';
 
-class StorageUsageListPage extends HookWidget {
+class StorageUsageListPage extends HookConsumerWidget {
   const StorageUsageListPage({super.key});
 
   @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget build(BuildContext context, WidgetRef ref) => Scaffold(
         backgroundColor: context.theme.background,
         appBar: MixinAppBar(
           title: Text(context.l10n.storageUsage),
@@ -27,23 +26,19 @@ class StorageUsageListPage extends HookWidget {
       );
 }
 
-class _Content extends HookWidget {
+class _Content extends HookConsumerWidget {
   const _Content();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final watchEvent = useMemoizedStream(
       () => DirectoryWatcher(context.accountServer.getMediaFilePath())
           .events
-          .throttleTime(
-            const Duration(milliseconds: 400),
-            trailing: true,
-          ),
+          .throttleTime(const Duration(milliseconds: 400)),
     ).data;
 
     final list =
-        useMemoizedFuture<List<Tuple2<ConversationStorageUsage, int>>?>(
-            () async {
+        useMemoizedFuture<List<(ConversationStorageUsage, int)>?>(() async {
       try {
         final accountServer = context.accountServer;
         final list = await accountServer.database.conversationDao
@@ -51,13 +46,13 @@ class _Content extends HookWidget {
             .get();
         final result = await Future.wait(
           list.map(
-            (e) async => Tuple2(
+            (e) async => (
               e,
               await accountServer.getConversationMediaSize(e.conversationId),
             ),
           ),
         );
-        result.sort((a, b) => b.item2 - a.item2);
+        result.sort((a, b) => b.$2 - a.$2);
         return result;
       } catch (e) {
         return [];
@@ -75,8 +70,7 @@ class _Content extends HookWidget {
     return ListView.separated(
       padding: const EdgeInsets.symmetric(vertical: 40),
       itemBuilder: (_, index) {
-        final item = list[index].item1;
-        final size = list[index].item2;
+        final (item, size) = list[index];
         return _Item(item: item, size: size);
       },
       separatorBuilder: (_, __) => const SizedBox(height: 10),
@@ -85,7 +79,7 @@ class _Content extends HookWidget {
   }
 }
 
-class _Item extends HookWidget {
+class _Item extends HookConsumerWidget {
   const _Item({
     required this.item,
     required this.size,
@@ -95,15 +89,12 @@ class _Item extends HookWidget {
   final int size;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final sizeString = useMemoized(() => filesize(size), [item, size]);
     return Align(
       child: CellGroup(
         padding: EdgeInsets.zero,
-        cellBackgroundColor: context.dynamicColor(
-          Colors.white,
-          darkColor: const Color.fromRGBO(255, 255, 255, 0.06),
-        ),
+        cellBackgroundColor: context.theme.settingCellBackgroundColor,
         child: CellItem(
           leading: ConversationAvatarWidget(
             conversationId: item.conversationId,
@@ -128,13 +119,13 @@ class _Item extends HookWidget {
               ),
             ],
           ),
-          onTap: () => context.read<ResponsiveNavigatorCubit>().pushPage(
-                ResponsiveNavigatorCubit.storageUsageDetail,
-                arguments: Tuple2(
-                  conversationValidName(item.name, item.fullName),
-                  item.conversationId,
-                ),
-              ),
+          onTap: () => ref.read(responsiveNavigatorProvider.notifier).pushPage(
+            ResponsiveNavigatorStateNotifier.storageUsageDetail,
+            arguments: (
+              conversationValidName(item.name, item.fullName),
+              item.conversationId,
+            ),
+          ),
         ),
       ),
     );

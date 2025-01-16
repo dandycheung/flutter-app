@@ -4,16 +4,17 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   desktop_drop
-  desktop_lifecycle
+  desktop_keep_screen_on
   desktop_webview_window
   file_selector_windows
   flutter_app_icon_badge
-  pasteboard
-  platform_device_id_windows
-  protocol_handler
-  quick_breakpad
-  screen_retriever
+  irondash_engine_context
+  local_auth_windows
+  protocol_handler_windows
+  screen_retriever_windows
+  sentry_flutter
   sqlite3_flutter_libs
+  super_native_extensions
   system_tray
   url_launcher_windows
   win_toast
@@ -22,8 +23,12 @@ list(APPEND FLUTTER_PLUGIN_LIST
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST
+  breakpad_client
+  mixin_logger
   ogg_opus_player
+  rhttp
   system_clock
+  webcrypto
 )
 
 set(PLUGIN_BUNDLED_LIBRARIES)

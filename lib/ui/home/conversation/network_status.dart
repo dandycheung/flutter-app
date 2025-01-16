@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:flutter_svg/svg.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:mixin_logger/mixin_logger.dart';
+import 'package:super_context_menu/super_context_menu.dart';
 
 import '../../../blaze/blaze.dart';
 import '../../../constants/resources.dart';
@@ -10,11 +13,11 @@ import '../../../utils/hook.dart';
 import '../../../utils/uri_utils.dart';
 import '../../../widgets/menu.dart';
 
-class NetworkStatus extends HookWidget {
+class NetworkStatus extends HookConsumerWidget {
   const NetworkStatus({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final connectedState = useMemoizedStream(
             () => context.accountServer.connectedStateStream.distinct(),
             initialData: ConnectedState.connecting)
@@ -30,13 +33,15 @@ class NetworkStatus extends HookWidget {
 
     return Column(
       children: [
-        ContextMenuPortalEntry(
-          buildMenus: () => [
-            ContextMenu(
+        CustomContextMenuWidget(
+          desktopMenuWidgetBuilder: CustomDesktopMenuWidgetBuilder(),
+          menuProvider: (request) => Menu(children: [
+            MenuAction(
               title: context.l10n.openLogDirectory,
-              onTap: () => openUri(context, mixinLogDirectory.uri.toString()),
+              callback: () =>
+                  openUri(context, mixinLogDirectory.uri.toString()),
             ),
-          ],
+          ]),
           child: _NetworkNotConnect(
             visible: connectedState != ConnectedState.connected &&
                 hasDisconnectedBefore.value,
@@ -71,28 +76,57 @@ class _NetworkNotConnect extends StatelessWidget {
     child = visible
         ? Container(
             padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 22),
-            color: context.theme.warning.withOpacity(0.2),
+            color: context.theme.warning.withValues(alpha: 0.2),
             child: Row(children: [
               ClipOval(
-                  child: Container(
-                      color: context.theme.warning,
-                      width: 20,
-                      height: 20,
-                      alignment: Alignment.center,
-                      child: SizedBox(
-                          width: 2,
-                          height: 10,
-                          child: SvgPicture.asset(
-                              Resources.assetsImagesExclamationMarkSvg,
-                              colorFilter: const ColorFilter.mode(
-                                Colors.white,
-                                BlendMode.srcIn,
-                              ),
-                              width: 2,
-                              height: 10)))),
+                child: Container(
+                  color: context.theme.warning,
+                  width: 20,
+                  height: 20,
+                  alignment: Alignment.center,
+                  child: SizedBox(
+                    width: 2,
+                    height: 10,
+                    child: SvgPicture.asset(
+                      Resources.assetsImagesExclamationMarkSvg,
+                      colorFilter: const ColorFilter.mode(
+                        Colors.white,
+                        BlendMode.srcIn,
+                      ),
+                      width: 2,
+                      height: 10,
+                    ),
+                  ),
+                ),
+              ),
               const SizedBox(width: 12),
-              Text(context.l10n.networkConnectionFailed,
-                  style: TextStyle(color: context.theme.text, fontSize: 14))
+              Expanded(
+                child: DefaultTextStyle.merge(
+                  style: TextStyle(
+                    color: context.theme.text,
+                    fontSize: 14,
+                  ),
+                  child: Row(
+                    children: [
+                      Text(context.l10n.networkConnectionFailed),
+                      const Spacer(),
+                      MouseRegion(
+                        cursor: SystemMouseCursors.click,
+                        child: GestureDetector(
+                          onTap: () {
+                            i('ui: click reconnect');
+                            context.accountServer.reconnectBlaze();
+                          },
+                          child: Text(
+                            context.l10n.retry,
+                            style: TextStyle(color: context.theme.accent),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              )
             ]))
         : const SizedBox();
 

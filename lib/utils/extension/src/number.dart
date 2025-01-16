@@ -9,8 +9,8 @@ extension CurrencyExtension on BuildContext {
 
   String get currencyFormatCoin => NumberFormat().format(num.tryParse('$this'));
 
-  NumberFormat get currentCurrencyNumberFormat => NumberFormat.simpleCurrency(
-      name: multiAuthState.currentUser?.fiatCurrency);
+  NumberFormat get currentCurrencyNumberFormat =>
+      NumberFormat.simpleCurrency(name: account?.fiatCurrency);
 }
 
 extension StringCurrencyExtension on String {
@@ -23,8 +23,7 @@ extension StringCurrencyExtension on String {
   String numberFormat() {
     if (isEmpty) return this;
     try {
-      return NumberFormat(asDecimal.toString().getPattern(count: 32))
-          .format(DecimalIntl(asDecimal));
+      return DecimalFormatter(NumberFormat('#,###.########')).format(asDecimal);
     } catch (error) {
       return this;
     }

@@ -14,8 +14,8 @@ extension AssetConverter on sdk.Asset {
     }
     return AssetsCompanion.insert(
       assetId: assetId,
-      symbol: symbol,
-      name: name,
+      symbol: displaySymbol,
+      name: displayName,
       iconUrl: iconUrl,
       balance: balance,
       destination: destination,
@@ -32,12 +32,15 @@ extension AssetConverter on sdk.Asset {
   }
 }
 
-@DriftAccessor(tables: [Assets], include: {'../moor/dao/asset.drift'})
+@DriftAccessor(include: {'../moor/dao/asset.drift'})
 class AssetDao extends DatabaseAccessor<MixinDatabase> with _$AssetDaoMixin {
   AssetDao(super.db);
 
   Future<int> insertSdkAsset(sdk.Asset asset) =>
       into(db.assets).insertOnConflictUpdate(asset.asAssetsCompanion);
+
+  Future<int> insertAsset(Asset asset) =>
+      into(db.assets).insert(asset, mode: InsertMode.insertOrIgnore);
 
   Future deleteAsset(Asset asset) => delete(db.assets).delete(asset);
 
@@ -49,4 +52,6 @@ class AssetDao extends DatabaseAccessor<MixinDatabase> with _$AssetDaoMixin {
       select(db.assets)
         ..where((t) => t.assetId.equals(assetId))
         ..limit(1);
+
+  Future<List<Asset>> getAssets() => select(db.assets).get();
 }

@@ -1,20 +1,47 @@
+// ignore_for_file: implementation_imports
+
 import 'dart:io';
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:flutter_portal/flutter_portal.dart';
 import 'package:flutter_svg/svg.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart' hide Provider;
+import 'package:mixin_logger/mixin_logger.dart';
 import 'package:provider/provider.dart';
+import 'package:super_context_menu/src/default_builder/group_intrinsic_width.dart';
+import 'package:super_context_menu/src/desktop.dart';
+import 'package:super_context_menu/src/mobile.dart';
+import 'package:super_context_menu/src/scaffold/desktop/menu_widget_builder.dart';
+import 'package:super_context_menu/src/scaffold/mobile/menu_widget_builder.dart';
+import 'package:super_context_menu/super_context_menu.dart';
 
 import '../bloc/simple_cubit.dart';
 import '../constants/resources.dart';
 import '../utils/extension/extension.dart';
 import '../utils/hook.dart';
+import '../utils/platform.dart';
+import 'action_button.dart';
 import 'hover_overlay.dart';
 import 'interactive_decorated_box.dart';
 import 'portal_providers.dart';
+
+class MenusWithSeparator extends Menu {
+  MenusWithSeparator({
+    required List<List<MenuElement>> childrens,
+    super.title,
+    super.image,
+  }) : super(
+          children: childrens
+              .where((element) => element.isNotEmpty)
+              .joinList([MenuSeparator()])
+              .expand((element) => element.toList())
+              .toList(),
+        );
+}
 
 class _OffsetCubit extends SimpleCubit<Offset?> {
   _OffsetCubit(super.state);
@@ -23,29 +50,104 @@ class _OffsetCubit extends SimpleCubit<Offset?> {
 extension ContextMenuPortalEntrySender on BuildContext {
   void sendMenuPosition(Offset offset) => read<_OffsetCubit>().emit(offset);
 
-  void closeMenu() => read<_OffsetCubit>().emit(null);
+  void closeMenu() => read<_OffsetCubit?>()?.emit(null);
 }
 
-class ContextMenuPortalEntry extends HookWidget {
-  const ContextMenuPortalEntry({
+typedef CustomPopupMenuItemBuilder<T> = List<CustomPopupMenuItem<T>> Function(
+    BuildContext context);
+
+class CustomPopupMenuButton<T> extends HookConsumerWidget {
+  const CustomPopupMenuButton({
+    required this.itemBuilder,
     super.key,
+    this.onSelected,
+    this.child,
+    this.icon,
+    this.color,
+    this.alignment,
+  });
+
+  final CustomPopupMenuItemBuilder<T> itemBuilder;
+  final PopupMenuItemSelected<T>? onSelected;
+  final String? icon;
+  final Widget? child;
+  final Color? color;
+  final Alignment? alignment;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => ContextMenuPortalEntry(
+        interactive: false,
+        buildMenus: () => itemBuilder(context)
+            .map(
+              (e) => ContextMenu(
+                title: e.title,
+                onTap: () => onSelected?.call(e.value),
+                isDestructiveAction: e.isDestructiveAction,
+                icon: e.icon,
+              ),
+            )
+            .toList(),
+        child: Builder(
+            builder: (context) => ActionButton(
+                  name: icon,
+                  color: color ?? context.theme.icon,
+                  onTapUp: (details) {
+                    d('onTapUp: $alignment');
+                    if (alignment == null) {
+                      context.sendMenuPosition(details.globalPosition);
+                      return;
+                    }
+                    final renderBox = context.findRenderObject() as RenderBox?;
+                    if (renderBox != null) {
+                      var position =
+                          alignment!.withinRect(renderBox.paintBounds);
+                      position = renderBox.localToGlobal(position);
+                      context.sendMenuPosition(position);
+                    } else {
+                      context.sendMenuPosition(details.globalPosition);
+                    }
+                  },
+                  child: child,
+                )),
+      );
+}
+
+class CustomPopupMenuItem<T> {
+  CustomPopupMenuItem({
+    required this.title,
+    required this.value,
+    this.isDestructiveAction = false,
+    this.icon,
+  });
+
+  final String title;
+  final T value;
+  final bool isDestructiveAction;
+  final String? icon;
+}
+
+class ContextMenuPortalEntry extends HookConsumerWidget {
+  const ContextMenuPortalEntry({
     required this.child,
     required this.buildMenus,
+    super.key,
     this.showedMenu,
-    this.interactiveForTap = false,
     this.enable = true,
     this.onTap,
+    this.interactive = true,
   });
 
   final Widget child;
   final List<Widget> Function() buildMenus;
   final ValueChanged<bool>? showedMenu;
-  final bool interactiveForTap;
   final bool enable;
   final VoidCallback? onTap;
 
+  /// Whether right click or long press to show menu
+  final bool interactive;
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final offsetCubit = useBloc(() => _OffsetCubit(null));
     final offset = useBlocState<_OffsetCubit, Offset?>(
       bloc: offsetCubit,
@@ -76,49 +178,43 @@ class ContextMenuPortalEntry extends HookWidget {
         onClose: () => offsetCubit.emit(null),
         child: PortalTarget(
           visible: visible,
-          portalFollower: HookBuilder(builder: (context) {
-            final focusNode = useMemoized(FocusNode.new);
+          portalFollower: Builder(builder: (context) {
             final show = offset != null && visible;
-            useEffect(() {
-              if (!show) {
-                return;
-              }
-              WidgetsBinding.instance.addPostFrameCallback((timeStamp) {
-                focusNode.requestFocus();
-              });
-            }, [focusNode]);
             if (show) {
-              return Focus(
-                focusNode: focusNode,
-                onKeyEvent: (node, key) {
-                  if (key.logicalKey == LogicalKeyboardKey.escape) {
-                    offsetCubit.emit(null);
-                    return KeyEventResult.handled;
-                  }
-                  return KeyEventResult.ignored;
-                },
-                child: CustomSingleChildLayout(
-                  delegate: PositionedLayoutDelegate(position: offset),
-                  child: ContextMenuPage(menus: buildMenus()),
-                ),
+              return CustomSingleChildLayout(
+                delegate: PositionedLayoutDelegate(position: offset),
+                child: ContextMenuPage(menus: buildMenus()),
               );
             }
-
             return const SizedBox();
           }),
           child: InteractiveDecoratedBox(
-            onRightClick: (PointerUpEvent pointerUpEvent) =>
-                offsetCubit.emit(pointerUpEvent.position),
+            onRightClick: (event) {
+              if (!interactive) {
+                return;
+              }
+              offsetCubit.emit(event.globalPosition);
+            },
             onLongPress: (details) {
+              if (!interactive) {
+                return;
+              }
               if (Platform.isAndroid || Platform.isIOS) {
                 offsetCubit.emit(details.globalPosition);
               }
             },
-            onTapUp: interactiveForTap
-                ? (details) => offsetCubit.emit(details.globalPosition)
-                : null,
             onTap: onTap,
-            child: child,
+            child: Focus(
+              onKeyEvent: (node, key) {
+                final show = offset != null && visible;
+                if (show && key.logicalKey == LogicalKeyboardKey.escape) {
+                  offsetCubit.emit(null);
+                  return KeyEventResult.handled;
+                }
+                return KeyEventResult.ignored;
+              },
+              child: child,
+            ),
           ),
         ),
       ),
@@ -128,10 +224,10 @@ class ContextMenuPortalEntry extends HookWidget {
 
 class Barrier extends StatelessWidget {
   const Barrier({
-    super.key,
     required this.onClose,
     required this.visible,
     required this.child,
+    super.key,
     this.duration,
   });
 
@@ -187,11 +283,26 @@ class PositionedLayoutDelegate extends SingleChildLayoutDelegate {
 
 class ContextMenuPage extends StatelessWidget {
   const ContextMenuPage({
-    super.key,
     required this.menus,
+    super.key,
   });
 
   final List<Widget> menus;
+
+  @override
+  Widget build(BuildContext context) => _ContextMenuContainerLayout(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: menus,
+        ),
+      );
+}
+
+class _ContextMenuContainerLayout extends StatelessWidget {
+  const _ContextMenuContainerLayout({required this.child});
+
+  final Widget child;
 
   @override
   Widget build(BuildContext context) {
@@ -225,12 +336,9 @@ class ContextMenuPage extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: const BorderRadius.all(Radius.circular(11)),
-        child: IntrinsicWidth(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: menus,
-          ),
+        child: Material(
+          color: Colors.transparent,
+          child: IntrinsicWidth(child: child),
         ),
       ),
     );
@@ -239,8 +347,8 @@ class ContextMenuPage extends StatelessWidget {
 
 class ContextMenu extends StatelessWidget {
   const ContextMenu({
-    super.key,
     required this.title,
+    super.key,
     this.isDestructiveAction = false,
     this.onTap,
     this.icon,
@@ -333,9 +441,9 @@ class ContextMenu extends StatelessWidget {
 
 class SubContextMenu extends StatelessWidget {
   const SubContextMenu({
-    super.key,
     required this.title,
     required this.menus,
+    super.key,
     this.icon,
     this.isDestructiveAction = false,
   });
@@ -367,3 +475,277 @@ class SubContextMenu extends StatelessWidget {
 class SubMenuClickedByTouchNotification extends Notification {
   const SubMenuClickedByTouchNotification();
 }
+
+class CustomDesktopMenuWidgetBuilder extends DefaultDesktopMenuWidgetBuilder {
+  CustomDesktopMenuWidgetBuilder();
+
+  static DefaultDesktopMenuTheme _themeForContext(BuildContext context) =>
+      DefaultDesktopMenuTheme.themeForBrightness(context.brightness);
+
+  @override
+  Widget buildMenuContainer(
+      BuildContext context, DesktopMenuInfo menuInfo, Widget child) {
+    final pixelRatio = MediaQuery.of(context).devicePixelRatio;
+    final theme = _themeForContext(context);
+    return Container(
+      decoration: theme.decorationOuter.copyWith(
+          borderRadius: BorderRadius.circular(6.0 + 1.0 / pixelRatio)),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(6),
+        child: Padding(
+          padding: EdgeInsets.all(1.0 / pixelRatio),
+          child: Container(
+            decoration: theme.decorationInner,
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: DefaultTextStyle.merge(
+              style: TextStyle(
+                color: Colors.black,
+                fontSize: 14,
+                decoration: TextDecoration.none,
+                fontWeight: FontWeight.w500,
+                fontFamilyFallback:
+                    Platform.isWindows ? ['Microsoft Yahei'] : null,
+              ),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: maxWidth),
+                child: GroupIntrinsicWidthContainer(child: child),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget buildSeparator(
+    BuildContext context,
+    DesktopMenuInfo menuInfo,
+    MenuSeparator separator,
+  ) {
+    final theme = _themeForContext(context);
+    final paddingLeft = 10.0 + (menuInfo.hasAnyCheckedItems ? (16 + 6) : 0);
+    const paddingRight = 10.0;
+    return Container(
+      height: 1,
+      margin: EdgeInsets.only(
+        left: paddingLeft,
+        right: paddingRight,
+        top: 5,
+        bottom: 6,
+      ),
+      color: theme.separatorColor,
+    );
+  }
+
+  IconData? _stateToIcon(MenuActionState state) {
+    switch (state) {
+      case MenuActionState.none:
+        return null;
+      case MenuActionState.checkOn:
+        return Icons.check;
+      case MenuActionState.checkOff:
+        return null;
+      case MenuActionState.checkMixed:
+        return Icons.remove;
+      case MenuActionState.radioOn:
+        return Icons.radio_button_on;
+      case MenuActionState.radioOff:
+        return Icons.radio_button_off;
+    }
+  }
+
+  @override
+  Widget buildMenuItem(
+    BuildContext context,
+    DesktopMenuInfo menuInfo,
+    Key innerKey,
+    DesktopMenuButtonState state,
+    MenuElement element,
+  ) {
+    final theme = _themeForContext(context);
+    final itemInfo = DesktopMenuItemInfo(
+      destructive: element is MenuAction && element.attributes.destructive,
+      disabled: element is MenuAction && element.attributes.disabled,
+      menuFocused: menuInfo.focused,
+      selected: state.selected,
+    );
+    final textStyle = theme.textStyleForItem(itemInfo);
+    final iconTheme = menuInfo.iconTheme.copyWith(
+      size: 16,
+      color: textStyle.color,
+    );
+    final stateIcon =
+        element is MenuAction ? _stateToIcon(element.state) : null;
+    final Widget? prefix;
+    if (stateIcon != null) {
+      prefix = Icon(
+        stateIcon,
+        size: 16,
+        color: iconTheme.color,
+      );
+    } else if (menuInfo.hasAnyCheckedItems) {
+      prefix = const SizedBox(width: 16);
+    } else {
+      prefix = null;
+    }
+    final image = element.image?.asWidget(iconTheme);
+
+    final Widget? suffix;
+    if (element is Menu) {
+      suffix = Icon(
+        Icons.chevron_right_outlined,
+        size: 18,
+        color: iconTheme.color,
+      );
+    } else if (element is MenuAction) {
+      final activator = element.activator?.stringRepresentation();
+      if (activator != null) {
+        suffix = Padding(
+          padding: const EdgeInsetsDirectional.only(end: 6),
+          child: Text(
+            activator,
+            style: theme.textStyleForItemActivator(itemInfo, textStyle),
+          ),
+        );
+      } else {
+        suffix = null;
+      }
+    } else {
+      suffix = null;
+    }
+
+    final child = element is DeferredMenuElement
+        ? const Align(
+            alignment: Alignment.centerLeft,
+            child: SizedBox(
+              height: 16,
+              width: 16,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Colors.grey,
+              ),
+            ),
+          )
+        : Text(
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            element.title ?? '',
+            style: textStyle,
+          );
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      child: Container(
+        key: innerKey,
+        padding: const EdgeInsets.all(5),
+        decoration: theme.decorationForItem(itemInfo),
+        child: Row(
+          children: [
+            if (prefix != null) prefix,
+            if (prefix != null) const SizedBox(width: 6),
+            if (image != null) image,
+            if (image != null) const SizedBox(width: 4),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 2),
+                child: child,
+              ),
+            ),
+            GroupIntrinsicWidth(
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  if (suffix != null) const SizedBox(width: 6),
+                  if (suffix != null) suffix,
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+extension on DesktopMenuInfo {
+  bool get hasAnyCheckedItems => resolvedChildren.any((element) =>
+      element is MenuAction && element.state != MenuActionState.none);
+}
+
+extension on SingleActivator {
+  String stringRepresentation() => [
+        if (control) 'Ctrl',
+        if (alt) 'Alt',
+        if (meta)
+          defaultTargetPlatform == TargetPlatform.macOS ? 'Cmd' : 'Meta',
+        if (shift) 'Shift',
+        trigger.keyLabel,
+      ].join('+');
+}
+
+class CustomContextMenuWidget extends StatelessWidget {
+  CustomContextMenuWidget({
+    required this.child,
+    required this.menuProvider,
+    super.key,
+    this.liftBuilder,
+    this.previewBuilder,
+    this.deferredPreviewBuilder,
+    this.hitTestBehavior = HitTestBehavior.deferToChild,
+    this.iconTheme,
+    this.contextMenuIsAllowed = _defaultContextMenuIsAllowed,
+    MobileMenuWidgetBuilder? mobileMenuWidgetBuilder,
+    DesktopMenuWidgetBuilder? desktopMenuWidgetBuilder,
+  })  : assert(previewBuilder == null || deferredPreviewBuilder == null,
+            'Cannot use both previewBuilder and deferredPreviewBuilder'),
+        mobileMenuWidgetBuilder =
+            mobileMenuWidgetBuilder ?? DefaultMobileMenuWidgetBuilder(),
+        desktopMenuWidgetBuilder =
+            desktopMenuWidgetBuilder ?? DefaultDesktopMenuWidgetBuilder();
+
+  final Widget Function(BuildContext context, Widget child)? liftBuilder;
+  final Widget Function(BuildContext context, Widget child)? previewBuilder;
+  final DeferredMenuPreview Function(BuildContext context, Widget child,
+      CancellationToken cancellationToken)? deferredPreviewBuilder;
+
+  final HitTestBehavior hitTestBehavior;
+  final MenuProvider menuProvider;
+  final ContextMenuIsAllowed contextMenuIsAllowed;
+  final Widget child;
+  final MobileMenuWidgetBuilder mobileMenuWidgetBuilder;
+  final DesktopMenuWidgetBuilder desktopMenuWidgetBuilder;
+
+  /// Base icon theme for menu icons. The size will be overridden depending
+  /// on platform.
+  final IconThemeData? iconTheme;
+
+  @override
+  Widget build(BuildContext context) {
+    if (kPlatformIsDesktop) {
+      return DesktopContextMenuWidget(
+        hitTestBehavior: hitTestBehavior,
+        menuProvider: menuProvider,
+        contextMenuIsAllowed: contextMenuIsAllowed,
+        iconTheme: iconTheme,
+        menuWidgetBuilder: desktopMenuWidgetBuilder,
+        tapRegionGroupIds: {child},
+        child: child,
+      );
+    } else {
+      return MobileContextMenuWidget(
+        hitTestBehavior: hitTestBehavior,
+        menuProvider: menuProvider,
+        liftBuilder: liftBuilder,
+        previewBuilder: previewBuilder,
+        deferredPreviewBuilder: deferredPreviewBuilder,
+        iconTheme: iconTheme,
+        contextMenuIsAllowed: contextMenuIsAllowed,
+        menuWidgetBuilder: mobileMenuWidgetBuilder,
+        child: child,
+      );
+    }
+  }
+}
+
+bool _defaultContextMenuIsAllowed(Offset location) => true;

@@ -2,7 +2,7 @@ import 'package:flutter/painting.dart';
 
 /// Creates a new path that is drawn from the segments of `source`.
 ///
-/// Dash intervals are controled by the `dashArray` - see [CircularIntervalList]
+/// Dash intervals are controlled by the `dashArray` - see [CircularIntervalList]
 /// for examples.
 ///
 /// `dashOffset` specifies an initial starting point for the dashing.
@@ -22,6 +22,7 @@ Path dashPath(
   for (final metric in source.computeMetrics()) {
     var distance = _dashOffset._calculate(metric.length);
     var draw = true;
+    dashArray.reset();
     while (distance < metric.length) {
       final len = dashArray.next;
       if (draw) {
@@ -78,6 +79,10 @@ class CircularIntervalList<T> {
   final List<T> _vals;
   int _idx = 0;
 
+  void reset() {
+    _idx = 0;
+  }
+
   T get next {
     if (_idx >= _vals.length) {
       _idx = 0;
@@ -96,8 +101,8 @@ class DashPathBorder extends Border {
   });
 
   factory DashPathBorder.all({
-    BorderSide borderSide = const BorderSide(),
     required CircularIntervalList<double> dashArray,
+    BorderSide borderSide = const BorderSide(),
   }) =>
       DashPathBorder(
         dashArray: dashArray,
@@ -130,7 +135,6 @@ class DashPathBorder extends Border {
                 dashPath(Path()..addOval(rect), dashArray: dashArray),
                 top.toPaint(),
               );
-              break;
             case BoxShape.rectangle:
               if (borderRadius != null) {
                 final rrect =
@@ -145,8 +149,6 @@ class DashPathBorder extends Border {
                 dashPath(Path()..addRect(rect), dashArray: dashArray),
                 top.toPaint(),
               );
-
-              break;
           }
           return;
       }

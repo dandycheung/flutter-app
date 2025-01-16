@@ -9,12 +9,14 @@ class _AttachmentDownloadJobOption {
     required this.keys,
     required this.digest,
     required this.sendPort,
+    required this.proxy,
   });
 
   final String path;
   final String url;
   final List<int>? keys;
   final List<int>? digest;
+  final ProxyConfig? proxy;
   final SendPort sendPort;
 }
 
@@ -34,6 +36,7 @@ class _AttachmentDownloadJob extends _AttachmentJobBase {
   late final ReceivePort? _receivePort;
 
   Future<void> download(
+    ProxyConfig? proxy,
     void Function(int count, int total) sendProgress,
   ) async {
     late Isolate? isolate;
@@ -41,20 +44,20 @@ class _AttachmentDownloadJob extends _AttachmentJobBase {
     final completer = Completer<void>();
 
     _receivePort!.listen((message) {
-      if (message == _killMessage) {
-        isolate?.kill();
-        isolate = null;
-        if (completer.isCompleted) return;
-        completer.completeError(Exception('receive kill message'));
-      }
-
-      if (message is Tuple2<int, int>) {
-        updateProgress(message.item1, message.item2);
-        sendProgress(message.item1, message.item2);
-        return;
-      }
-      if (message == _completeMessage) {
-        completer.complete();
+      switch (message) {
+        case _completeMessage:
+          completer.complete();
+          return;
+        case (final int received, final int total):
+          updateProgress(received, total);
+          sendProgress(received, total);
+          return;
+        case _killMessage:
+          isolate?.kill();
+          isolate = null;
+          if (completer.isCompleted) return;
+          completer.completeError(Exception('receive kill message'));
+          return;
       }
     });
 
@@ -65,7 +68,8 @@ class _AttachmentDownloadJob extends _AttachmentJobBase {
           url: url,
           keys: keys,
           digest: digest,
-          sendPort: _receivePort!.sendPort,
+          sendPort: _receivePort.sendPort,
+          proxy: proxy,
         ));
 
     return completer.future;
@@ -76,6 +80,8 @@ class _AttachmentDownloadJob extends _AttachmentJobBase {
 }
 
 Future<void> _download(_AttachmentDownloadJobOption options) async {
+  await rhttp.Rhttp.init();
+
   final cancelToken = CancelToken();
 
   final receivePort = ReceivePort();
@@ -88,6 +94,7 @@ Future<void> _download(_AttachmentDownloadJobOption options) async {
 
   try {
     var received = 0;
+    _dio.applyProxy(options.proxy);
     final response = await _dio._download(
       options.url,
       options.path,
@@ -101,9 +108,13 @@ Future<void> _download(_AttachmentDownloadJobOption options) async {
         if (options.keys != null && options.digest != null) {
           _stream = _stream.decrypt(options.keys!, options.digest!, total);
         }
-        return _stream.doOnData((event) {
+        return _stream.handleError((error, stacktrace) {
+          e('download error: $error, stack: $stacktrace');
+          throw Exception(error);
+        }).map((event) {
           received += event.length;
-          options.sendPort.send(Tuple2(received, total));
+          options.sendPort.send((received, total));
+          return event;
         });
       },
       cancelToken: cancelToken,
@@ -112,30 +123,33 @@ Future<void> _download(_AttachmentDownloadJobOption options) async {
     if (response.statusCode != 200) throw Error();
     options.sendPort.send(_completeMessage);
   } catch (error, s) {
-    e('download error: $e, stack: $s');
+    e('download error: $error, stack: $s');
+    if (error is DioException) {
+      e('original stacktrace: ${error.stackTrace}');
+    }
+    options.sendPort.send(_killMessage);
   }
-  options.sendPort.send(_killMessage);
 }
 
 extension _AttachmentDownloadExtension on Dio {
   Future<Response> _download(
     String urlPath,
     String savePath, {
+    required Stream<List<int>> Function(Stream<Uint8List> stream, int total)
+        transformStream,
     Map<String, dynamic>? queryParameters,
     CancelToken? cancelToken,
     bool deleteOnError = true,
     String lengthHeader = Headers.contentLengthHeader,
     data,
     Options? options,
-    required Stream<List<int>> Function(Stream<Uint8List> stream, int total)
-        transformStream,
   }) async {
     // We set the `responseType` to [ResponseType.STREAM] to retrieve the
     // response stream.
-    options ??= DioMixin.checkOptions('GET', options);
-
-    // Receive data with stream.
-    options.responseType = ResponseType.stream;
+    options ??= Options();
+    options
+      ..method = 'GET'
+      ..responseType = ResponseType.stream;
     Response<ResponseBody> response;
     try {
       response = await request<ResponseBody>(
@@ -145,8 +159,8 @@ extension _AttachmentDownloadExtension on Dio {
         queryParameters: queryParameters,
         cancelToken: cancelToken ?? CancelToken(),
       );
-    } on DioError catch (e) {
-      if (e.type == DioErrorType.badResponse) {
+    } on DioException catch (e) {
+      if (e.type == DioExceptionType.badResponse) {
         if (e.response!.requestOptions.receiveDataWhenStatusError) {
           final res = await transformer.transformResponse(
             e.response!.requestOptions..responseType = ResponseType.json,
@@ -212,8 +226,9 @@ extension _AttachmentDownloadExtension on Dio {
           try {
             await subscription.cancel();
           } finally {
-            completer.completeError(DioMixin.assureDioError(
-                err, response.requestOptions, stackTrace));
+            completer.completeError(
+                // ignore: invalid_use_of_internal_member
+                DioMixin.assureDioException(err, response.requestOptions));
           }
         });
       },
@@ -223,11 +238,11 @@ extension _AttachmentDownloadExtension on Dio {
           closed = true;
           await raf.close();
           completer.complete(response);
-        } catch (e, stack) {
-          completer.completeError(DioMixin.assureDioError(
+        } catch (e) {
+          // ignore: invalid_use_of_internal_member
+          completer.completeError(DioMixin.assureDioException(
             e,
             response.requestOptions,
-            stack,
           ));
         }
       },
@@ -235,8 +250,9 @@ extension _AttachmentDownloadExtension on Dio {
         try {
           await _closeAndDelete();
         } finally {
-          completer.completeError(DioMixin.assureDioError(
-              e, response.requestOptions, StackTrace.current));
+          completer.completeError(
+              // ignore: invalid_use_of_internal_member
+              DioMixin.assureDioException(e, response.requestOptions));
         }
       },
       cancelOnError: true,
@@ -259,10 +275,10 @@ extension _AttachmentDownloadExtension on Dio {
         await _closeAndDelete();
         if (err is TimeoutException) {
           // ignore: only_throw_errors
-          throw DioError(
+          throw DioException(
             requestOptions: response.requestOptions,
             error: 'Receiving data timeout[${receiveTimeout}ms]',
-            type: DioErrorType.receiveTimeout,
+            type: DioExceptionType.receiveTimeout,
           );
         } else {
           w('download error: $err, stack: $s');
@@ -271,6 +287,7 @@ extension _AttachmentDownloadExtension on Dio {
         }
       });
     }
+    // ignore: invalid_use_of_internal_member
     return DioMixin.listenCancelForAsyncTask(cancelToken, future);
   }
 }

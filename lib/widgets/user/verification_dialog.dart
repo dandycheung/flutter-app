@@ -4,9 +4,9 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:mixin_bot_sdk_dart/mixin_bot_sdk_dart.dart';
 import 'package:pin_code_fields/pin_code_fields.dart';
-import 'package:tuple/tuple.dart';
 
 import '../../utils/extension/extension.dart';
 import '../../utils/logger.dart';
@@ -88,7 +88,7 @@ Future<VerificationResponse> requestVerificationCode({
   required String phone,
   required BuildContext context,
   required VerificationPurpose purpose,
-  Tuple2<CaptchaType, String>? captcha,
+  (CaptchaType, String)? captcha,
   AccountApi? accountApi,
 }) async {
   final request = VerificationRequest(
@@ -96,9 +96,8 @@ Future<VerificationResponse> requestVerificationCode({
     purpose: purpose,
     packageName: 'one.mixin.messenger',
     gRecaptchaResponse:
-        captcha?.item1 == CaptchaType.gCaptcha ? captcha?.item2 : null,
-    hCaptchaResponse:
-        captcha?.item1 == CaptchaType.hCaptcha ? captcha?.item2 : null,
+        captcha?.$1 == CaptchaType.gCaptcha ? captcha?.$2 : null,
+    hCaptchaResponse: captcha?.$1 == CaptchaType.hCaptcha ? captcha?.$2 : null,
   );
   final api = accountApi ?? context.accountServer.client.accountApi;
   try {
@@ -117,7 +116,7 @@ Future<VerificationResponse> requestVerificationCode({
         return requestVerificationCode(
           phone: phone,
           context: context,
-          captcha: Tuple2(type, token),
+          captcha: (type, token),
           purpose: purpose,
           accountApi: api,
         );
@@ -129,13 +128,13 @@ Future<VerificationResponse> requestVerificationCode({
   }
 }
 
-class VerificationCodeInputLayout extends HookWidget {
+class VerificationCodeInputLayout extends HookConsumerWidget {
   const VerificationCodeInputLayout({
-    super.key,
     required this.phoneNumber,
     required this.initialVerificationResponse,
     required this.reRequestVerification,
     required this.onVerification,
+    super.key,
   });
 
   final String phoneNumber;
@@ -146,7 +145,7 @@ class VerificationCodeInputLayout extends HookWidget {
   final void Function(String, VerificationResponse) onVerification;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final codeInputController = useTextEditingController();
     final verification =
         useRef<VerificationResponse>(initialVerificationResponse);
@@ -221,13 +220,13 @@ class VerificationCodeInputLayout extends HookWidget {
   }
 }
 
-class ResendCodeWidget extends HookWidget {
-  const ResendCodeWidget({super.key, required this.onResend});
+class ResendCodeWidget extends HookConsumerWidget {
+  const ResendCodeWidget({required this.onResend, super.key});
 
   final Future<bool> Function() onResend;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final nextDuration = useState(60);
     useEffect(() {
       final timer = Timer.periodic(

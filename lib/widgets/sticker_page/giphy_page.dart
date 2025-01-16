@@ -2,23 +2,24 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:rxdart/rxdart.dart';
 
 import '../../api/giphy_api.dart';
 import '../../api/giphy_vo/giphy_gif.dart';
-import '../../ui/home/bloc/conversation_cubit.dart';
+import '../../ui/provider/conversation_provider.dart';
 import '../../utils/extension/extension.dart';
 import '../../utils/hook.dart';
 import '../../utils/logger.dart';
-import '../cache_image.dart';
 import '../interactive_decorated_box.dart';
+import '../mixin_image.dart';
 import '../search_text_field.dart';
 
-class GiphyPage extends HookWidget {
+class GiphyPage extends HookConsumerWidget {
   const GiphyPage({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final textEditingController = useTextEditingController();
 
     final searchKeywordController = useStreamController<String>();
@@ -72,13 +73,13 @@ class _SearchBar extends StatelessWidget {
       );
 }
 
-class _GiphyGifsLoader extends HookWidget {
+class _GiphyGifsLoader extends HookConsumerWidget {
   const _GiphyGifsLoader({this.query});
 
   final String? query;
 
   @override
-  Widget build(BuildContext context) => _GifGridView(
+  Widget build(BuildContext context, WidgetRef ref) => _GifGridView(
         loadGifs: (limit, offset) {
           d('loadGifs($query): $limit, $offset');
           if (query == null || query!.isEmpty) {
@@ -97,13 +98,13 @@ class _GiphyGifsLoader extends HookWidget {
 
 const _limit = 51;
 
-class _GifGridView extends HookWidget {
+class _GifGridView extends HookConsumerWidget {
   const _GifGridView({required this.loadGifs, super.key});
 
   final Future<List<GiphyGif>> Function(int limit, int offset) loadGifs;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final hasMore = useState(true);
 
     final loading = useState(false);
@@ -159,22 +160,22 @@ class _GifGridView extends HookWidget {
   }
 }
 
-class _GifItem extends HookWidget {
+class _GifItem extends HookConsumerWidget {
   const _GifItem({required this.gif});
 
   final GiphyGif gif;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final previewImage = gif.images.fixedWidthDownsampled;
     final sendImage = gif.images.fixedWidth;
-    final playing = useImagePlaying(context);
 
     return InteractiveDecoratedBox(
       onTap: () async {
         final accountServer = context.accountServer;
-        final conversationItem = context.read<ConversationCubit>().state;
+        final conversationItem = ref.read(conversationProvider);
         if (conversationItem == null) return;
+
         await accountServer.sendImageMessageByUrl(
           conversationItem.encryptCategory,
           sendImage.url,
@@ -185,9 +186,8 @@ class _GifItem extends HookWidget {
           height: int.tryParse(sendImage.height),
         );
       },
-      child: CacheImage(
+      child: MixinImage.network(
         previewImage.url,
-        controller: playing,
         placeholder: () => ColoredBox(color: context.theme.secondaryText),
       ),
     );

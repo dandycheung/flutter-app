@@ -1,16 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../utils/extension/extension.dart';
 import '../../widgets/app_bar.dart';
 import '../../widgets/cell.dart';
 import '../../widgets/user/change_number_dialog.dart';
-import '../home/route/responsive_navigator_cubit.dart';
+import '../provider/responsive_navigator_provider.dart';
 
-class AccountPage extends StatelessWidget {
+class AccountPage extends HookConsumerWidget {
   const AccountPage({super.key});
 
   @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget build(BuildContext context, WidgetRef ref) => Scaffold(
         backgroundColor: context.theme.background,
         appBar: MixinAppBar(
           title: Text(context.l10n.account),
@@ -22,25 +23,20 @@ class AccountPage extends StatelessWidget {
             child: Column(
               children: [
                 CellGroup(
-                  cellBackgroundColor: context.dynamicColor(
-                    Colors.white,
-                    darkColor: const Color.fromRGBO(255, 255, 255, 0.06),
-                  ),
+                  cellBackgroundColor: context.theme.settingCellBackgroundColor,
                   child: CellItem(
                     title: Text(context.l10n.changeNumber),
                     onTap: () => showChangeNumberDialog(context),
                   ),
                 ),
                 CellGroup(
-                  cellBackgroundColor: context.dynamicColor(
-                    Colors.white,
-                    darkColor: const Color.fromRGBO(255, 255, 255, 0.06),
-                  ),
+                  cellBackgroundColor: context.theme.settingCellBackgroundColor,
                   child: CellItem(
                     title: Text(context.l10n.deleteMyAccount),
-                    onTap: () => context
-                        .read<ResponsiveNavigatorCubit>()
-                        .pushPage(ResponsiveNavigatorCubit.accountDeletePage),
+                    onTap: () => ref
+                        .read(responsiveNavigatorProvider.notifier)
+                        .pushPage(
+                            ResponsiveNavigatorStateNotifier.accountDeletePage),
                   ),
                 )
               ],
