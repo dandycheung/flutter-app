@@ -1,18 +1,20 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_svg/svg.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../constants/resources.dart';
-import '../ui/home/route/responsive_navigator_cubit.dart';
+import '../ui/provider/responsive_navigator_provider.dart';
 import '../utils/extension/extension.dart';
 import 'interactive_decorated_box.dart';
 
 class CellGroup extends StatelessWidget {
-  const CellGroup(
-      {super.key,
-      this.borderRadius = const BorderRadius.all(Radius.circular(8)),
-      required this.child,
-      this.padding = const EdgeInsets.only(right: 10, left: 10, bottom: 10),
-      this.cellBackgroundColor});
+  const CellGroup({
+    required this.child,
+    super.key,
+    this.borderRadius = const BorderRadius.all(Radius.circular(8)),
+    this.padding = const EdgeInsets.only(right: 10, left: 10, bottom: 10),
+    this.cellBackgroundColor,
+  });
 
   final BorderRadius borderRadius;
   final Widget child;
@@ -56,11 +58,11 @@ class _CellItemStyle extends InheritedWidget {
       old.backgroundColor == backgroundColor;
 }
 
-class CellItem extends StatelessWidget {
+class CellItem extends HookConsumerWidget {
   const CellItem({
+    required this.title,
     super.key,
     this.leading,
-    required this.title,
     this.color,
     this.onTap,
     this.selected = false,
@@ -77,11 +79,11 @@ class CellItem extends StatelessWidget {
   final Widget? description;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final dynamicColor = color ?? context.theme.text;
     final backgroundColor = _CellItemStyle.of(context).backgroundColor;
     var selectedBackgroundColor = backgroundColor;
-    if (selected && !context.read<ResponsiveNavigatorCubit>().state.routeMode) {
+    if (selected && !ref.watch(navigatorRouteModeProvider)) {
       selectedBackgroundColor = Color.alphaBlend(
         context.dynamicColor(
           const Color.fromRGBO(0, 0, 0, 0.05),

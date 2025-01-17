@@ -1,11 +1,12 @@
 import 'dart:io';
 
+import 'package:auto_size_text/auto_size_text.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:flutter_svg/svg.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../account/account_key_value.dart';
-import '../../bloc/bloc_converter.dart';
 import '../../constants/resources.dart';
 import '../../utils/app_lifecycle.dart';
 import '../../utils/extension/extension.dart';
@@ -15,16 +16,18 @@ import '../../widgets/action_button.dart';
 import '../../widgets/app_bar.dart';
 import '../../widgets/avatar_view/avatar_view.dart';
 import '../../widgets/cell.dart';
+import '../../widgets/conversation/badges_widget.dart';
+import '../../widgets/high_light_text.dart';
 import '../../widgets/toast.dart';
-import '../home/bloc/multi_auth_cubit.dart';
 import '../home/home.dart';
-import '../home/route/responsive_navigator_cubit.dart';
+import '../provider/multi_auth_provider.dart';
+import '../provider/responsive_navigator_provider.dart';
 
-class SettingPage extends HookWidget {
+class SettingPage extends HookConsumerWidget {
   const SettingPage({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final hasDrawer = context.watch<HasDrawerValueNotifier>();
 
     Widget? leading;
@@ -45,10 +48,9 @@ class SettingPage extends HookWidget {
         keys: [appActive]).data;
     final controller = useScrollController();
 
-    final userHasPin =
-        useBlocStateConverter<MultiAuthCubit, MultiAuthState, bool>(
-      converter: (e) => e.currentUser?.hasPin == true,
-    );
+    final userHasPin = ref
+        .watch(authProvider.select((value) => value?.account.hasPin == true));
+
     return Column(
       children: [
         MixinAppBar(
@@ -68,8 +70,9 @@ class SettingPage extends HookWidget {
                   children: [
                     CellGroup(
                       child: _Item(
-                        assetName: Resources.assetsImagesIcProfileSvg,
-                        pageName: ResponsiveNavigatorCubit.editProfilePage,
+                        leadingAssetName: Resources.assetsImagesIcProfileSvg,
+                        pageName:
+                            ResponsiveNavigatorStateNotifier.editProfilePage,
                         title: context.l10n.editProfile,
                       ),
                     ),
@@ -80,13 +83,17 @@ class SettingPage extends HookWidget {
                               userHasPin &&
                               AccountKeyValue.instance.primarySessionId == null)
                             _Item(
-                              assetName: Resources.assetsImagesAccountSvg,
-                              pageName: ResponsiveNavigatorCubit.accountPage,
+                              leadingAssetName:
+                                  Resources.assetsImagesAccountSvg,
+                              pageName:
+                                  ResponsiveNavigatorStateNotifier.accountPage,
                               title: context.l10n.account,
                             ),
                           _Item(
-                            assetName: Resources.assetsImagesIcNotificationSvg,
-                            pageName: ResponsiveNavigatorCubit.notificationPage,
+                            leadingAssetName:
+                                Resources.assetsImagesIcNotificationSvg,
+                            pageName: ResponsiveNavigatorStateNotifier
+                                .notificationPage,
                             title: context.l10n.notifications,
                             trailing: hasNotificationPermission == false
                                 ? Padding(
@@ -105,19 +112,35 @@ class SettingPage extends HookWidget {
                                 : context.theme.text,
                           ),
                           _Item(
-                            assetName: Resources.assetsImagesIcStorageUsageSvg,
-                            pageName: ResponsiveNavigatorCubit
+                            leadingAssetName:
+                                Resources.assetsImagesIcStorageUsageSvg,
+                            pageName: ResponsiveNavigatorStateNotifier
                                 .dataAndStorageUsagePage,
                             title: context.l10n.dataAndStorageUsage,
                           ),
                           _Item(
-                            assetName: Resources.assetsImagesIcAppearanceSvg,
-                            pageName: ResponsiveNavigatorCubit.appearancePage,
+                            leadingAssetName: Resources.assetsImagesShieldSvg,
+                            pageName:
+                                ResponsiveNavigatorStateNotifier.securityPage,
+                            title: context.l10n.security,
+                          ),
+                          _Item(
+                            leadingAssetName: Resources.assetsImagesProxySvg,
+                            pageName:
+                                ResponsiveNavigatorStateNotifier.proxyPage,
+                            title: context.l10n.proxy,
+                          ),
+                          _Item(
+                            leadingAssetName:
+                                Resources.assetsImagesIcAppearanceSvg,
+                            pageName:
+                                ResponsiveNavigatorStateNotifier.appearancePage,
                             title: context.l10n.appearance,
                           ),
                           _Item(
-                            assetName: Resources.assetsImagesIcAboutSvg,
-                            pageName: ResponsiveNavigatorCubit.aboutPage,
+                            leadingAssetName: Resources.assetsImagesIcAboutSvg,
+                            pageName:
+                                ResponsiveNavigatorStateNotifier.aboutPage,
                             title: context.l10n.about,
                           ),
                         ],
@@ -127,14 +150,14 @@ class SettingPage extends HookWidget {
                 ),
                 CellGroup(
                   child: _Item(
-                    assetName: Resources.assetsImagesIcSignOutSvg,
+                    leadingAssetName: Resources.assetsImagesIcSignOutSvg,
                     title: context.l10n.signOut,
                     onTap: () async {
                       final succeed = await runFutureWithToast(
                         context.accountServer.signOutAndClear(),
                       );
                       if (!succeed) return;
-                      context.multiAuthCubit.signOut();
+                      context.multiAuthChangeNotifier.signOut();
                     },
                     color: context.theme.red,
                     trailing: const SizedBox(),
@@ -149,17 +172,17 @@ class SettingPage extends HookWidget {
   }
 }
 
-class _Item extends StatelessWidget {
+class _Item extends HookConsumerWidget {
   const _Item({
-    required this.assetName,
     required this.title,
+    this.leadingAssetName,
     this.pageName,
     this.color,
     this.onTap,
     this.trailing = const Arrow(),
   });
 
-  final String assetName;
+  final String? leadingAssetName;
   final String title;
   final String? pageName;
   final Color? color;
@@ -167,82 +190,102 @@ class _Item extends StatelessWidget {
   final Widget? trailing;
 
   @override
-  Widget build(BuildContext context) =>
-      BlocConverter<ResponsiveNavigatorCubit, ResponsiveNavigatorState, bool>(
-        converter: (state) =>
-            !state.routeMode &&
-            state.pages.any((element) => pageName == element.name),
-        builder: (context, selected) => CellItem(
-          leading: SvgPicture.asset(
-            assetName,
-            width: 24,
-            height: 24,
-            colorFilter:
-                ColorFilter.mode(color ?? context.theme.text, BlendMode.srcIn),
-          ),
-          title: Text(title),
-          color: color ?? context.theme.text,
-          selected: selected,
-          onTap: () {
-            if (onTap == null && pageName != null) {
-              context.read<ResponsiveNavigatorCubit>()
-                ..popWhere((page) => ResponsiveNavigatorCubit.settingPageNameSet
-                    .contains(page.name))
-                ..pushPage(pageName!);
-              return;
-            }
+  Widget build(BuildContext context, WidgetRef ref) {
+    final selected = ref.watch(responsiveNavigatorProvider.select((value) =>
+        !value.routeMode &&
+        value.pages.any((element) => pageName == element.name)));
 
-            onTap?.call();
-          },
-          trailing: trailing,
-        ),
-      );
+    return CellItem(
+      leading: (leadingAssetName != null
+          ? SvgPicture.asset(
+              leadingAssetName!,
+              width: 24,
+              height: 24,
+              colorFilter: ColorFilter.mode(
+                  color ?? context.theme.text, BlendMode.srcIn),
+            )
+          : null),
+      title: AutoSizeText(title, maxLines: 1),
+      color: color ?? context.theme.text,
+      selected: selected,
+      onTap: () {
+        if (onTap == null && pageName != null) {
+          context.providerContainer.read(responsiveNavigatorProvider.notifier)
+            ..popWhere((page) => ResponsiveNavigatorStateNotifier
+                .settingPageNameSet
+                .contains(page.name))
+            ..pushPage(pageName!);
+          return;
+        }
+
+        onTap?.call();
+      },
+      trailing: trailing,
+    );
+  }
 }
 
-class _UserProfile extends StatelessWidget {
+class _UserProfile extends HookConsumerWidget {
   const _UserProfile();
 
   @override
-  Widget build(BuildContext context) => Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Builder(builder: (context) {
-            final account = context.multiAuthState.currentUser!;
-            return AvatarWidget(
-              userId: account.userId,
-              name: account.fullName,
-              avatarUrl: account.avatarUrl,
-              size: 90,
-            );
-          }),
-          const SizedBox(height: 10),
-          BlocConverter<MultiAuthCubit, MultiAuthState, String?>(
-            converter: (state) => state.current?.account.fullName,
-            when: (a, b) => b != null,
-            builder: (context, fullName) => Text(
-              fullName ?? '',
-              style: TextStyle(
-                fontWeight: FontWeight.w600,
-                fontSize: 18,
-                color: context.theme.text,
-              ),
-            ),
-          ),
-          const SizedBox(height: 4),
-          BlocConverter<MultiAuthCubit, MultiAuthState, String?>(
-            converter: (state) => state.current?.account.identityNumber,
-            when: (a, b) => b != null,
-            builder: (context, identityNumber) => Text(
-              'Mixin ID: $identityNumber',
-              style: TextStyle(
-                fontSize: 14,
-                color: context.dynamicColor(
-                  const Color.fromRGBO(188, 190, 195, 1),
-                  darkColor: const Color.fromRGBO(255, 255, 255, 0.4),
+  Widget build(BuildContext context, WidgetRef ref) {
+    final (fullName, identityNumber, membership, isVerified) = ref.watch(
+        authAccountProvider.select((value) => (
+              value?.fullName,
+              value?.identityNumber,
+              value?.membership,
+              value?.isVerified
+            )));
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Builder(builder: (context) {
+          final account = context.account!;
+          return AvatarWidget(
+            userId: account.userId,
+            name: account.fullName,
+            avatarUrl: account.avatarUrl,
+            size: 90,
+          );
+        }),
+        const SizedBox(height: 10),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CustomText(
+                fullName ?? '',
+                maxLines: 2,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 18,
+                  color: context.theme.text,
                 ),
               ),
+              BadgesWidget(
+                verified: isVerified,
+                isBot: false,
+                membership: membership,
+              )
+            ],
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Mixin ID: $identityNumber',
+          style: TextStyle(
+            fontSize: 14,
+            color: context.dynamicColor(
+              const Color.fromRGBO(188, 190, 195, 1),
+              darkColor: const Color.fromRGBO(255, 255, 255, 0.4),
             ),
           ),
-        ],
-      );
+        ),
+      ],
+    );
+  }
 }

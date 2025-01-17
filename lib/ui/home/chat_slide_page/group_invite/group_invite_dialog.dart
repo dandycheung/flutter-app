@@ -1,15 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../../../constants/resources.dart';
+import '../../../../db/database_event_bus.dart';
 import '../../../../db/mixin_database.dart';
 import '../../../../utils/extension/extension.dart';
 import '../../../../utils/hook.dart';
 import '../../../../widgets/avatar_view/avatar_view.dart';
 import '../../../../widgets/buttons.dart';
 import '../../../../widgets/dialog.dart';
+import '../../../../widgets/high_light_text.dart';
 import '../../../../widgets/interactive_decorated_box.dart';
 import '../../../../widgets/toast.dart';
 import '../../../../widgets/user_selector/conversation_selector.dart';
@@ -23,7 +25,7 @@ Future<void> showGroupInviteByLinkDialog(BuildContext context,
       ));
 }
 
-class _GroupInviteByLinkDialog extends HookWidget {
+class _GroupInviteByLinkDialog extends HookConsumerWidget {
   const _GroupInviteByLinkDialog({
     required this.conversationId,
   });
@@ -31,13 +33,19 @@ class _GroupInviteByLinkDialog extends HookWidget {
   final String conversationId;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final conversation = useMemoizedStream(
       () {
         context.accountServer.refreshConversation(conversationId);
         return context.database.conversationDao
             .conversationById(conversationId)
-            .watchSingleOrNullThrottle(kDefaultThrottleDuration);
+            .watchSingleOrNullWithStream(
+          eventStreams: [
+            DataBaseEventBus.instance
+                .watchUpdateConversationStream([conversationId]),
+          ],
+          duration: kDefaultThrottleDuration,
+        );
       },
       keys: [conversationId],
     ).data;
@@ -105,7 +113,7 @@ class _GroupInviteBody extends StatelessWidget {
           const SizedBox(height: 12),
           SizedBox(
             width: 320,
-            child: SelectableText(
+            child: CustomSelectableText(
               conversation.codeUrl ?? '',
               style: TextStyle(
                 fontSize: 14,
@@ -166,15 +174,16 @@ class _ActionButtons extends StatelessWidget {
               ));
             },
           ),
-          _IconButton(
-            label: context.l10n.copyInvite,
-            iconAssetName: Resources.assetsImagesInviteCopySvg,
-            onTap: () async {
-              await Clipboard.setData(
-                  ClipboardData(text: conversation.codeUrl));
-              showToastSuccessful();
-            },
-          ),
+          if (conversation.codeUrl != null)
+            _IconButton(
+              label: context.l10n.copyInvite,
+              iconAssetName: Resources.assetsImagesInviteCopySvg,
+              onTap: () async {
+                final codeUrl = conversation.codeUrl;
+                await Clipboard.setData(ClipboardData(text: codeUrl!));
+                showToastSuccessful();
+              },
+            ),
           _IconButton(
             label: context.l10n.resetLink,
             iconAssetName: Resources.assetsImagesInviteRefreshSvg,

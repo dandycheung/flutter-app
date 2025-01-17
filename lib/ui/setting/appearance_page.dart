@@ -2,11 +2,11 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart' hide Provider;
 import 'package:mixin_bot_sdk_dart/mixin_bot_sdk_dart.dart';
 import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
 
-import '../../bloc/setting_cubit.dart';
 import '../../constants/resources.dart';
 import '../../db/mixin_database.dart';
 import '../../utils/extension/extension.dart';
@@ -19,6 +19,7 @@ import '../../widgets/message/message_day_time.dart';
 import '../../widgets/radio.dart';
 import '../home/bloc/blink_cubit.dart';
 import '../home/chat/chat_page.dart';
+import '../provider/setting_provider.dart';
 
 class AppearancePage extends StatelessWidget {
   const AppearancePage({super.key});
@@ -36,12 +37,12 @@ class AppearancePage extends StatelessWidget {
       );
 }
 
-class _Body extends StatelessWidget {
+class _Body extends HookConsumerWidget {
   const _Body();
 
   @override
-  Widget build(BuildContext context) => SingleChildScrollView(
-      child: Container(
+  Widget build(BuildContext context, WidgetRef ref) => SingleChildScrollView(
+        child: Container(
           padding: const EdgeInsets.only(top: 20),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -57,19 +58,16 @@ class _Body extends StatelessWidget {
                 ),
               ),
               CellGroup(
-                cellBackgroundColor: context.dynamicColor(
-                  Colors.white,
-                  darkColor: const Color.fromRGBO(255, 255, 255, 0.06),
-                ),
+                cellBackgroundColor: context.theme.settingCellBackgroundColor,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     CellItem(
                       title: RadioItem<Brightness?>(
                         title: Text(context.l10n.followSystem),
-                        groupValue: context.watch<SettingCubit>().brightness,
+                        groupValue: ref.watch(settingProvider).brightness,
                         onChanged: (value) =>
-                            context.settingCubit.brightness = value,
+                            context.settingChangeNotifier.brightness = value,
                         value: null,
                       ),
                       trailing: null,
@@ -77,9 +75,9 @@ class _Body extends StatelessWidget {
                     CellItem(
                       title: RadioItem<Brightness?>(
                         title: Text(context.l10n.light),
-                        groupValue: context.watch<SettingCubit>().brightness,
+                        groupValue: ref.watch(settingProvider).brightness,
                         onChanged: (value) =>
-                            context.settingCubit.brightness = value,
+                            context.settingChangeNotifier.brightness = value,
                         value: Brightness.light,
                       ),
                       trailing: null,
@@ -87,9 +85,9 @@ class _Body extends StatelessWidget {
                     CellItem(
                       title: RadioItem<Brightness?>(
                         title: Text(context.l10n.dark),
-                        groupValue: context.watch<SettingCubit>().brightness,
+                        groupValue: ref.watch(settingProvider).brightness,
                         onChanged: (value) =>
-                            context.settingCubit.brightness = value,
+                            context.settingChangeNotifier.brightness = value,
                         value: Brightness.dark,
                       ),
                       trailing: null,
@@ -100,16 +98,20 @@ class _Body extends StatelessWidget {
               const _MessageAvatarSetting(),
               const _ChatTextSizeSetting(),
             ],
-          )));
+          ),
+        ),
+      );
 }
 
-class _MessageAvatarSetting extends HookWidget {
+class _MessageAvatarSetting extends HookConsumerWidget {
   const _MessageAvatarSetting();
 
   @override
-  Widget build(BuildContext context) {
-    final showAvatar = useBlocStateConverter<SettingCubit, SettingState, bool>(
-      converter: (style) => style.messageShowAvatar,
+  Widget build(BuildContext context, WidgetRef ref) {
+    final showAvatar =
+        ref.watch(settingProvider.select((value) => value.messageShowAvatar));
+    final showIdentityNumber = ref.watch(
+      settingProvider.select((value) => value.messageShowIdentityNumber),
     );
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -118,7 +120,7 @@ class _MessageAvatarSetting extends HookWidget {
         Padding(
           padding: const EdgeInsets.only(left: 10, bottom: 14, top: 22),
           child: Text(
-            context.l10n.avatar,
+            context.l10n.chat,
             style: TextStyle(
               color: context.theme.secondaryText,
               fontSize: 14,
@@ -126,35 +128,49 @@ class _MessageAvatarSetting extends HookWidget {
           ),
         ),
         CellGroup(
-          cellBackgroundColor: context.dynamicColor(
-            Colors.white,
-            darkColor: const Color.fromRGBO(255, 255, 255, 0.06),
+          cellBackgroundColor: context.theme.settingCellBackgroundColor,
+          child: Column(
+            children: [
+              CellItem(
+                title: Text(context.l10n.showAvatar),
+                trailing: Transform.scale(
+                  scale: 0.7,
+                  child: CupertinoSwitch(
+                    activeTrackColor: context.theme.accent,
+                    value: showAvatar,
+                    onChanged: (bool value) =>
+                        context.settingChangeNotifier.messageShowAvatar = value,
+                  ),
+                ),
+              ),
+              CellItem(
+                title: Text(context.l10n.showIdentityNumber),
+                trailing: Transform.scale(
+                  scale: 0.7,
+                  child: CupertinoSwitch(
+                    activeTrackColor: context.theme.accent,
+                    value: showIdentityNumber,
+                    onChanged: (bool value) => context.settingChangeNotifier
+                        .messageShowIdentityNumber = value,
+                  ),
+                ),
+              )
+            ],
           ),
-          child: CellItem(
-            title: Text(context.l10n.showAvatar),
-            trailing: Transform.scale(
-                scale: 0.7,
-                child: CupertinoSwitch(
-                  activeColor: context.theme.accent,
-                  value: showAvatar,
-                  onChanged: (bool value) =>
-                      context.settingCubit.messageShowAvatar = value,
-                )),
-          ),
-        )
+        ),
       ],
     );
   }
 }
 
-class _ChatTextSizeSetting extends HookWidget {
+class _ChatTextSizeSetting extends HookConsumerWidget {
   const _ChatTextSizeSetting();
 
   @override
-  Widget build(BuildContext context) {
-    final fontSize = useBlocStateConverter<SettingCubit, SettingState, double>(
-      converter: (style) => style.chatFontSizeDelta,
-    );
+  Widget build(BuildContext context, WidgetRef ref) {
+    final fontSize =
+        ref.watch(settingProvider.select((value) => value.chatFontSizeDelta));
+
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 600),
       child: Column(
@@ -200,7 +216,7 @@ class _ChatTextSizeSetting extends HookWidget {
                     max: 4,
                     onChanged: (value) {
                       debugPrint('fontSize: $value');
-                      context.settingCubit.chatFontSizeDelta = value;
+                      context.settingChangeNotifier.chatFontSizeDelta = value;
                     },
                   ),
                 ),
@@ -238,15 +254,15 @@ MessageItem _buildFakeTextMessage(String content) {
   );
 }
 
-class _ChatTextSizePreview extends HookWidget {
+class _ChatTextSizePreview extends HookConsumerWidget {
   const _ChatTextSizePreview();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final tickerProvider = useSingleTickerProvider();
     final blinkCubit = useMemoized(() => BlinkCubit(
           tickerProvider,
-          context.theme.accent.withOpacity(0.5),
+          context.theme.accent.withValues(alpha: 0.5),
         ));
     final chatSideCubit = useBloc(ChatSideCubit.new);
     final searchConversationKeywordCubit = useBloc(
@@ -279,8 +295,8 @@ class _ChatTextSizePreview extends HookWidget {
               fit: BoxFit.none,
               colorFilter: ColorFilter.mode(
                 context.brightnessValue == 1.0
-                    ? Colors.white.withOpacity(0.02)
-                    : Colors.black.withOpacity(0.03),
+                    ? Colors.white.withValues(alpha: 0.02)
+                    : Colors.black.withValues(alpha: 0.03),
                 BlendMode.srcIn,
               ),
             ),

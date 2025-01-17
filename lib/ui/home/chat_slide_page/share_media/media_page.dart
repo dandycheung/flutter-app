@@ -2,6 +2,7 @@ import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:flutter_svg/svg.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:sliver_tools/sliver_tools.dart';
@@ -13,23 +14,23 @@ import '../../../../enum/message_category.dart';
 import '../../../../utils/extension/extension.dart';
 import '../../../../utils/hook.dart';
 import '../../../../widgets/message/item/image/image_message.dart';
-import '../../../../widgets/message/item/video_message.dart';
+import '../../../../widgets/message/item/video/video_message.dart';
 import '../../../../widgets/message/message.dart';
 import '../../chat/chat_page.dart';
 import '../shared_media_page.dart';
 
-class MediaPage extends HookWidget {
+class MediaPage extends HookConsumerWidget {
   const MediaPage({
-    super.key,
     required this.maxHeight,
     required this.conversationId,
+    super.key,
   });
 
   final double maxHeight;
   final String conversationId;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final column = useMemoized(() => maxHeight / 90 * 2, [maxHeight]).toInt();
     final routeMode = context.read<ChatSideCubit>().state.routeMode;
     final size = column * (routeMode ? 4 : 3);
@@ -43,11 +44,10 @@ class MediaPage extends HookWidget {
         loadMoreData: (list) async {
           if (list.isEmpty) return [];
           final last = list.last;
-          final rowId =
-              await messageDao.messageRowId(last.messageId).getSingleOrNull();
-          if (rowId == null) return [];
+          final info = await messageDao.messageOrderInfo(last.messageId);
+          if (info == null) return [];
           final items = await messageDao
-              .mediaMessagesBefore(rowId, conversationId, size)
+              .mediaMessagesBefore(info, conversationId, size)
               .get();
           return [...list, ...items];
         },
@@ -56,15 +56,14 @@ class MediaPage extends HookWidget {
       keys: [conversationId],
     );
     useEffect(
-      () => messageDao.insertOrReplaceMessageStream
+      () => messageDao
+          .watchInsertOrReplaceMessageStream(conversationId)
           .switchMap<MessageItem>((value) async* {
             for (final item in value) {
               yield item;
             }
           })
-          .where((event) =>
-              event.conversationId == conversationId &&
-              [
+          .where((event) => [
                 MessageCategory.plainImage,
                 MessageCategory.signalImage,
                 MessageCategory.plainVideo,
@@ -96,7 +95,7 @@ class MediaPage extends HookWidget {
             SvgPicture.asset(
               Resources.assetsImagesEmptyImageSvg,
               colorFilter: ColorFilter.mode(
-                context.theme.secondaryText.withOpacity(0.4),
+                context.theme.secondaryText.withValues(alpha: 0.4),
                 BlendMode.srcIn,
               ),
             ),
@@ -203,11 +202,11 @@ class _Item extends StatelessWidget {
   }
 }
 
-class _ItemVideo extends HookWidget {
+class _ItemVideo extends HookConsumerWidget {
   const _ItemVideo();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final durationText = useMessageConverter(
       converter: (state) =>
           Duration(milliseconds: int.tryParse(state.mediaDuration ?? '') ?? 0)
@@ -229,7 +228,7 @@ class _ItemVideo extends HookWidget {
                   begin: Alignment.bottomCenter,
                   end: Alignment.topCenter,
                   colors: [
-                    Colors.black.withOpacity(0.5),
+                    Colors.black.withValues(alpha: 0.5),
                     Colors.transparent,
                   ],
                 ),

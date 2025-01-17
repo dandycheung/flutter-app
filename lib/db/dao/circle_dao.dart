@@ -1,10 +1,11 @@
 import 'package:drift/drift.dart';
 
+import '../database_event_bus.dart';
 import '../mixin_database.dart';
 
 part 'circle_dao.g.dart';
 
-@DriftAccessor(tables: [Circles])
+@DriftAccessor(include: {'../moor/dao/circle.drift'})
 class CircleDao extends DatabaseAccessor<MixinDatabase> with _$CircleDaoMixin {
   CircleDao(super.db);
 
@@ -17,30 +18,20 @@ class CircleDao extends DatabaseAccessor<MixinDatabase> with _$CircleDaoMixin {
           ? into(db.circles).insert(circle)
           : into(db.circles).insertOnConflictUpdate(circle);
     });
+    DataBaseEventBus.instance.updateCircle();
   }
 
-  Future<int> deleteCircle(String circleId) =>
-      (delete(db.circles)..where((tbl) => tbl.circleId.equals(circleId))).go();
-
-  Selectable<ConversationCircleItem> allCircles() => db.allCircles();
-
-  Selectable<ConversationCircleManagerItem> circleByConversationId(
-          String conversationId) =>
-      db.circleByConversationId(conversationId);
+  Future<int> deleteCircleById(String circleId) =>
+      (delete(db.circles)..where((tbl) => tbl.circleId.equals(circleId)))
+          .go()
+          .then((value) {
+        DataBaseEventBus.instance.updateCircle();
+        return value;
+      });
 
   Future<Circle?> findCircleById(String circleId) =>
       (select(db.circles)..where((t) => t.circleId.equals(circleId)))
           .getSingleOrNull();
-
-  Selectable<ConversationCircleManagerItem> otherCircleByConversationId(
-          String conversationId) =>
-      db.otherCircleByConversationId(conversationId);
-
-  Selectable<String> circlesNameByConversationId(String conversationId) =>
-      db.circlesNameByConversationId(conversationId);
-
-  Future<int> deleteCircleById(String circleId) =>
-      db.deleteCircleById(circleId);
 
   Future<void> updateOrders(List<ConversationCircleItem> value) {
     final now = DateTime.now();
@@ -55,6 +46,10 @@ class CircleDao extends DatabaseAccessor<MixinDatabase> with _$CircleDaoMixin {
       );
     });
     return batch(
-        (batch) => batch.insertAllOnConflictUpdate(db.circles, newCircles));
+            (batch) => batch.insertAllOnConflictUpdate(db.circles, newCircles))
+        .then((value) {
+      DataBaseEventBus.instance.updateCircle();
+      return value;
+    });
   }
 }

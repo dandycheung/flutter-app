@@ -5,20 +5,23 @@ import 'package:equatable/equatable.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:ogg_opus_player/ogg_opus_player.dart';
 
 import '../../../constants/resources.dart';
+import '../../../utils/audio_message_player/audio_message_service.dart';
 import '../../../utils/extension/extension.dart';
 import '../../../utils/file.dart';
 import '../../../utils/hook.dart';
 import '../../../utils/load_balancer_utils.dart';
 import '../../../utils/logger.dart';
+import '../../../utils/system/audio_session.dart';
 import '../../../widgets/action_button.dart';
 import '../../../widgets/dialog.dart';
 import '../../../widgets/toast.dart';
 import '../../../widgets/waveform_widget.dart';
-import '../bloc/conversation_cubit.dart';
-import '../bloc/quote_message_cubit.dart';
+import '../../provider/conversation_provider.dart';
+import '../../provider/quote_message_provider.dart';
 
 enum RecorderState {
   idle,
@@ -28,8 +31,8 @@ enum RecorderState {
 
 class VoiceRecorderCubitState with EquatableMixin {
   const VoiceRecorderCubitState({
-    this.startTime,
     required this.state,
+    this.startTime,
     this.recodedData,
   });
 
@@ -55,13 +58,15 @@ class RecordedData with EquatableMixin {
 }
 
 class VoiceRecorderCubit extends Cubit<VoiceRecorderCubitState> {
-  VoiceRecorderCubit()
+  VoiceRecorderCubit(this.audioMessagePlayService)
       : super(const VoiceRecorderCubitState(
           state: RecorderState.idle,
         ));
 
   OggOpusRecorder? _recorder;
   String? _recorderFilePath;
+
+  final AudioMessagePlayService audioMessagePlayService;
 
   Completer<void>? _startingCompleter;
 
@@ -73,6 +78,7 @@ class VoiceRecorderCubit extends Cubit<VoiceRecorderCubitState> {
       return;
     }
     assert(_recorder == null, 'Recorder already started');
+    audioMessagePlayService.stop();
     _startingCompleter = Completer();
     final path = await generateTempFilePath(TempFileType.voiceRecord);
     _recorderFilePath = path;
@@ -83,6 +89,7 @@ class VoiceRecorderCubit extends Cubit<VoiceRecorderCubitState> {
     }
     await file.create(recursive: true);
     d('start recode voice, path : $path');
+    await AudioSession.instance.activeRecord();
     _recorder = OggOpusRecorder(path);
     _recorder?.start();
     _timer = Timer(const Duration(seconds: 60), stopRecording);
@@ -118,6 +125,7 @@ class VoiceRecorderCubit extends Cubit<VoiceRecorderCubitState> {
     }
 
     recorder?.dispose();
+    await AudioSession.instance.deactivate();
 
     final recodeData = RecordedData(
       waveform ?? const [],
@@ -165,11 +173,11 @@ class VoiceRecorderCubit extends Cubit<VoiceRecorderCubitState> {
   }
 }
 
-class VoiceRecorderBarOverlayComposition extends HookWidget {
+class VoiceRecorderBarOverlayComposition extends HookConsumerWidget {
   const VoiceRecorderBarOverlayComposition({
-    super.key,
     required this.child,
     required this.layoutWidth,
+    super.key,
   });
 
   final Widget child;
@@ -177,19 +185,18 @@ class VoiceRecorderBarOverlayComposition extends HookWidget {
   final double layoutWidth;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final isRecorderMode = useBlocStateConverter<VoiceRecorderCubit,
         VoiceRecorderCubitState, bool>(
       converter: (state) => state.state != RecorderState.idle,
     );
     final link = useMemoized(LayerLink.new);
-    final overlay = Overlay.of(context, rootOverlay: true);
+
+    final overlay = Navigator.of(context).overlay ?? Overlay.of(context);
 
     final recorderBottomBarEntry = useRef<OverlayEntry?>(null);
 
     final voiceRecorderCubit = context.read<VoiceRecorderCubit>();
-    final quoteMessageCubit = context.read<QuoteMessageCubit>();
-    final conversationCubit = context.read<ConversationCubit>();
 
     useEffect(
       () {
@@ -204,20 +211,14 @@ class VoiceRecorderBarOverlayComposition extends HookWidget {
               BlocProvider<VoiceRecorderCubit>.value(
                 value: voiceRecorderCubit,
               ),
-              BlocProvider<QuoteMessageCubit>.value(
-                value: quoteMessageCubit,
-              ),
-              BlocProvider<ConversationCubit>.value(
-                value: conversationCubit,
-              ),
             ],
             child: _RecordingInterceptor(
               child: UnconstrainedBox(
                 child: CompositedTransformFollower(
                   link: link,
                   showWhenUnlinked: false,
-                  targetAnchor: Alignment.center,
-                  followerAnchor: Alignment.center,
+                  targetAnchor: Alignment.bottomCenter,
+                  followerAnchor: Alignment.bottomCenter,
                   child: SizedBox(
                     width: layoutWidth,
                     child: const Material(child: VoiceRecorderBottomBar()),
@@ -239,13 +240,13 @@ class VoiceRecorderBarOverlayComposition extends HookWidget {
   }
 }
 
-class _RecordingInterceptor extends HookWidget {
+class _RecordingInterceptor extends HookConsumerWidget {
   const _RecordingInterceptor({required this.child});
 
   final Widget child;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final isRecording = useBlocStateConverter<VoiceRecorderCubit,
         VoiceRecorderCubitState, bool>(
       converter: (state) => state.state == RecorderState.recording,
@@ -344,11 +345,11 @@ void _showDiscardRecordingWarningAlertOverlay(
   overlay.insert(entry!);
 }
 
-class VoiceRecorderBottomBar extends HookWidget {
+class VoiceRecorderBottomBar extends HookConsumerWidget {
   const VoiceRecorderBottomBar({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final startTime = useBlocStateConverter<VoiceRecorderCubit,
         VoiceRecorderCubitState, DateTime?>(
       converter: (state) => state.startTime,
@@ -369,12 +370,16 @@ class VoiceRecorderBottomBar extends HookWidget {
       final audioFile = File(recordedResult.path);
       if (!audioFile.existsSync()) {
         e('audio file does not exist.');
-        showToastFailed(null);
+        scheduleMicrotask(() {
+          showToastFailed(null);
+        });
         return;
       }
       if (audioFile.lengthSync() == 0) {
         e('audio file is empty.');
-        showToastFailed(null);
+        scheduleMicrotask(() {
+          showToastFailed(null);
+        });
         return;
       }
     }, [recordedResult]);
@@ -444,10 +449,8 @@ class VoiceRecorderBottomBar extends HookWidget {
             name: Resources.assetsImagesIcSendSvg,
             color: context.theme.icon,
             onTap: () async {
-              final conversationItem = context.read<ConversationCubit>().state;
+              final conversationItem = ref.read(conversationProvider);
               final accountServer = context.accountServer;
-              final quietMessageId =
-                  context.read<QuoteMessageCubit>().state?.messageId;
 
               final recorderCubit = context.read<VoiceRecorderCubit>();
 
@@ -474,6 +477,8 @@ class VoiceRecorderBottomBar extends HookWidget {
               }
               if (conversationItem == null) return;
 
+              final quoteMessageId = ref.read(quoteMessageIdProvider);
+              ref.read(quoteMessageProvider.notifier).state = null;
               await accountServer.sendAudioMessage(
                 audioFile.xFile,
                 result.duration,
@@ -481,7 +486,7 @@ class VoiceRecorderBottomBar extends HookWidget {
                 conversationItem.encryptCategory,
                 conversationId: conversationItem.conversationId,
                 recipientId: conversationItem.userId,
-                quoteMessageId: quietMessageId,
+                quoteMessageId: quoteMessageId,
               );
             },
           ),
@@ -502,7 +507,8 @@ class _Player {
 
   OggOpusPlayer? _player;
 
-  void start() {
+  Future<void> start() async {
+    await AudioSession.instance.activePlayback();
     final player = OggOpusPlayer(path);
     player.state.addListener(() {
       final state = player.state.value;
@@ -515,10 +521,11 @@ class _Player {
     _player = player;
   }
 
-  void stop() {
+  Future<void> stop() async {
     _player?.pause();
     _player?.dispose();
     _player = null;
+    await AudioSession.instance.deactivate();
     isPlaying.value = false;
   }
 
@@ -527,13 +534,13 @@ class _Player {
   }
 }
 
-class _RecordedResultPreviewLayout extends HookWidget {
+class _RecordedResultPreviewLayout extends HookConsumerWidget {
   const _RecordedResultPreviewLayout({required this.result});
 
   final RecordedData result;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final player = useMemoized(
       () => _Player(result.path),
     );
@@ -594,7 +601,7 @@ class _RecordedResultPreviewLayout extends HookWidget {
   }
 }
 
-class _TickRefreshContainer extends HookWidget {
+class _TickRefreshContainer extends HookConsumerWidget {
   const _TickRefreshContainer({
     required this.builder,
     required this.active,
@@ -604,7 +611,7 @@ class _TickRefreshContainer extends HookWidget {
   final bool active;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final tickerProvider = useSingleTickerProvider();
     final state = useState<bool>(false);
     final ticker = useMemoized(

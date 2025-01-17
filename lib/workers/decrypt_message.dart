@@ -3,10 +3,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:drift/drift.dart';
-import 'package:ed25519_edwards/ed25519_edwards.dart';
+import 'package:ed25519_edwards/ed25519_edwards.dart' as ed;
 import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
 import 'package:mixin_bot_sdk_dart/mixin_bot_sdk_dart.dart';
-import 'package:tuple/tuple.dart';
 import 'package:uuid/uuid.dart';
 
 import '../blaze/blaze_message.dart';
@@ -26,6 +25,7 @@ import '../crypto/signal/signal_database.dart';
 import '../crypto/signal/signal_key_util.dart';
 import '../crypto/signal/signal_protocol.dart';
 import '../crypto/uuid/uuid.dart';
+import '../db/dao/message_dao.dart';
 import '../db/database.dart';
 import '../db/extension/job.dart';
 import '../db/mixin_database.dart' as db;
@@ -35,12 +35,20 @@ import '../enum/message_action.dart';
 import '../enum/message_category.dart';
 import '../enum/system_circle_action.dart';
 import '../enum/system_user_action.dart';
+import '../utils/device_transfer/transfer_data_command.dart';
 import '../utils/extension/extension.dart';
 import '../utils/load_balancer_utils.dart';
 import '../utils/logger.dart';
 import '../widgets/message/send_message_dialog/attachment_extra.dart';
+import 'device_transfer.dart';
 import 'injector.dart';
 import 'isolate_event.dart';
+import 'job/ack_job.dart';
+import 'job/sending_job.dart';
+import 'job/sync_inscription_message_job.dart';
+import 'job/update_asset_job.dart';
+import 'job/update_sticker_job.dart';
+import 'job/update_token_job.dart';
 import 'message_worker_isolate.dart';
 import 'sender.dart';
 
@@ -55,6 +63,13 @@ class DecryptMessage extends Injector {
     this._privateKey,
     this._isolateEventSender,
     this.identityNumber,
+    this._ackJob,
+    this._sendingJob,
+    this._updateStickerJob,
+    this._updateAssetJob,
+    this._deviceTransfer,
+    this._updateTokenJob,
+    this._syncInscriptionJob,
   ) : super(userId, database, client) {
     _encryptedProtocol = EncryptedProtocol();
   }
@@ -66,10 +81,17 @@ class DecryptMessage extends Injector {
   late final SignalProtocol _signalProtocol;
   late final Sender _sender;
   late final String _sessionId;
-  late final PrivateKey _privateKey;
+  late final ed.PrivateKey _privateKey;
   late EncryptedProtocol _encryptedProtocol;
 
   final String identityNumber;
+  final AckJob _ackJob;
+  final SendingJob _sendingJob;
+  final UpdateStickerJob _updateStickerJob;
+  final UpdateAssetJob _updateAssetJob;
+  final UpdateTokenJob _updateTokenJob;
+  final SyncInscriptionMessageJob _syncInscriptionJob;
+  final DeviceTransferIsolateController? _deviceTransfer;
 
   final refreshKeyMap = <String, int?>{};
 
@@ -85,13 +107,14 @@ class DecryptMessage extends Injector {
       return true;
     }
     final messageHistory =
-        await database.messagesHistoryDao.findMessageHistoryById(messageId);
+        await database.messageHistoryDao.findMessageHistoryById(messageId);
     return messageHistory != null;
   }
 
   Future<void> _insertMessage(Message message, BlazeMessageData data) async {
     await database.messageDao.insert(message, accountId,
         silent: data.silent, expireIn: data.expireIn);
+    unawaited(database.ftsDatabase.insertFts(message));
     if (data.expireIn > 0 && message.userId == accountId) {
       final expiredAt =
           data.createdAt.millisecondsSinceEpoch ~/ 1000 + data.expireIn;
@@ -129,7 +152,7 @@ class DecryptMessage extends Injector {
         d('DecryptMessage isSignal');
         if (data.category == MessageCategory.signalKey) {
           _remoteStatus = MessageStatus.read;
-          await database.messagesHistoryDao
+          await database.messageHistoryDao
               .insert(MessagesHistoryData(messageId: data.messageId));
         }
         await _processSignalMessage(data);
@@ -195,7 +218,7 @@ class DecryptMessage extends Injector {
           if (composeMessageData.resendMessageId != null) {
             await _processReDecryptMessage(
                 data, composeMessageData.resendMessageId!, plain);
-            await database.messagesHistoryDao
+            await database.messageHistoryDao
                 .insert(MessagesHistoryData(messageId: data.messageId));
           } else {
             try {
@@ -253,8 +276,17 @@ class DecryptMessage extends Injector {
           unawaited(_sender.sendProcessSignalKey(
               data, ProcessSignalKeyAction.resendKey));
         }
+      } else if (plainJsonMessage.action == kDeviceTransfer) {
+        final json =
+            jsonDecode(plainJsonMessage.content!) as Map<String, dynamic>;
+        final command = TransferDataCommand.fromJson(json);
+        if (_deviceTransfer == null) {
+          e('DeviceTransfer is null, but received command $command');
+        }
+        i('on device transfer command: $command');
+        _deviceTransfer?.handleRemoteCommand(command);
       }
-      await database.messagesHistoryDao
+      await database.messageHistoryDao
           .insert(MessagesHistoryData(messageId: data.messageId));
     } else if (data.category == MessageCategory.plainText ||
         data.category == MessageCategory.plainImage ||
@@ -333,11 +365,11 @@ class DecryptMessage extends Injector {
           sessionId: data.sessionId,
           status: 1,
           createdAt: DateTime.now()));
-      await database.jobDao.insertSendingJob(
+      await _sendingJob.add(await database.jobDao.createSendingJob(
         id,
         data.conversationId,
         expireIn: data.expireIn,
-      );
+      ));
     }
   }
 
@@ -358,6 +390,24 @@ class DecryptMessage extends Injector {
       final systemSnapshot = SnapshotMessage.fromJson(
           _jsonDecode(data.data) as Map<String, dynamic>);
       await _processSystemSnapshotMessage(data, systemSnapshot);
+    } else if (data.category == MessageCategory.systemSafeSnapshot) {
+      final json = _jsonDecode(data.data) as Map<String, dynamic>;
+
+      final systemSnapshot = db.SafeSnapshot.fromJson(json);
+      String? depositHash;
+      if (json
+          case {
+            'deposit_hash': final String hash,
+          }) {
+        depositHash = hash;
+      }
+      await _processSystemSafeSnapshotMessage(
+          data, systemSnapshot, depositHash);
+    } else if (data.category == MessageCategory.systemSafeInscription) {
+      final json = _jsonDecode(data.data);
+      final inscription =
+          db.SafeSnapshot.fromJson(json as Map<String, dynamic>);
+      await _processSystemSafeInscriptionMessage(data, inscription);
     }
   }
 
@@ -416,7 +466,8 @@ class DecryptMessage extends Injector {
         _jsonDecode(data.data) as Map<String, dynamic>);
 
     if (pinMessage.action == PinMessagePayloadAction.pin) {
-      await Future.forEach<String>(pinMessage.messageIds, (messageId) async {
+      await futureForEachIndexed(pinMessage.messageIds,
+          (index, messageId) async {
         final message =
             await database.messageDao.findMessageByMessageId(messageId);
         if (message == null) return;
@@ -432,7 +483,7 @@ class DecryptMessage extends Injector {
         ));
         await database.messageDao.insert(
           Message(
-            messageId: const Uuid().v4(),
+            messageId: index == 0 ? data.messageId : const Uuid().v4(),
             conversationId: data.conversationId,
             quoteMessageId: message.messageId,
             userId: data.userId,
@@ -452,9 +503,7 @@ class DecryptMessage extends Injector {
       await database.pinMessageDao.deleteByIds(pinMessage.messageIds);
     }
 
-    database.messageDao.notifyMessageInsertOrReplaced(pinMessage.messageIds);
-
-    await database.messagesHistoryDao
+    await database.messageHistoryDao
         .insert(MessagesHistoryData(messageId: data.messageId));
   }
 
@@ -466,6 +515,8 @@ class DecryptMessage extends Injector {
 
     await database.messageDao
         .recallMessage(data.conversationId, recallMessage.messageId);
+
+    unawaited(database.ftsDatabase.deleteByMessageId(recallMessage.messageId));
 
     await Future.wait([
       (() async {
@@ -495,10 +546,11 @@ class DecryptMessage extends Injector {
               quoteMessage.toJson());
         }
       })(),
-      database.messageMentionDao
-          .deleteMessageMentionByMessageId(recallMessage.messageId),
-      database.messageDao.deleteFtsByMessageId(recallMessage.messageId),
-      database.messagesHistoryDao
+      database.messageMentionDao.deleteMessageMention(MessageMention(
+        messageId: recallMessage.messageId,
+        conversationId: data.conversationId,
+      )),
+      database.messageHistoryDao
           .insert(MessagesHistoryData(messageId: data.messageId)),
     ]);
   }
@@ -579,6 +631,7 @@ class DecryptMessage extends Injector {
               status: data.status,
               createdAt: data.createdAt,
               mediaStatus: MediaStatus.canceled,
+              caption: attachment.caption,
               quoteMessageId: data.quoteMessageId,
               quoteContent: quoteContent?.toJson()));
       await _insertMessage(message, data);
@@ -690,7 +743,8 @@ class DecryptMessage extends Injector {
       if (sticker == null ||
           (stickerMessage.albumId != null &&
               (sticker.albumId?.isEmpty ?? true))) {
-        await database.jobDao.insertUpdateStickerJob(stickerMessage.stickerId);
+        await _updateStickerJob
+            .add(createUpdateStickerJob(stickerMessage.stickerId));
       }
       final message = Message(
           messageId: data.messageId,
@@ -917,7 +971,7 @@ class DecryptMessage extends Injector {
       final conversationId = systemMessage.conversationId ??
           generateConversationId(accountId, systemMessage.userId!);
       await database.circleConversationDao
-          .deleteByIds(conversationId, systemMessage.circleId);
+          .deleteById(conversationId, systemMessage.circleId);
     } else if (systemMessage.action == SystemCircleAction.delete) {
       await database.circleDao.deleteCircleById(systemMessage.circleId);
       await database.circleConversationDao
@@ -936,9 +990,12 @@ class DecryptMessage extends Injector {
       createdAt: DateTime.parse(
         snapshotMessage.createdAt,
       ),
+      snapshotHash: snapshotMessage.snapshotHash,
+      openingBalance: snapshotMessage.openingBalance,
+      closingBalance: snapshotMessage.closingBalance,
     );
     await database.snapshotDao.insert(snapshot);
-    await database.jobDao.insertUpdateAssetJob(snapshotMessage.assetId);
+    await _updateAssetJob.add(createUpdateAssetJob(snapshotMessage.assetId));
     var status = data.status;
     if (_conversationId == data.conversationId && data.userId != accountId) {
       status = MessageStatus.read;
@@ -955,35 +1012,83 @@ class DecryptMessage extends Injector {
     await _insertMessage(message, data);
   }
 
+  Future<void> _processSystemSafeSnapshotMessage(BlazeMessageData data,
+      db.SafeSnapshot snapshot, String? depositHash) async {
+    if (depositHash != null && depositHash.isNotEmpty) {
+      await database.safeSnapshotDao.deletePendingSnapshotByHash(depositHash);
+      await database.safeSnapshotDao.insert(snapshot.copyWith(
+        deposit: Value(SafeDeposit(
+          depositHash: depositHash,
+          sender: '',
+        )),
+      ));
+    } else {
+      await database.safeSnapshotDao.insert(snapshot);
+    }
+
+    final message = Message(
+      messageId: data.messageId,
+      conversationId: data.conversationId,
+      userId: data.senderId,
+      category: data.category!,
+      content: '',
+      snapshotId: snapshot.snapshotId,
+      status: data.status,
+      createdAt: data.createdAt,
+      action: snapshot.type,
+    );
+    await _insertMessage(message, data);
+    await _updateTokenJob.add(createUpdateTokenJob(snapshot.assetId));
+  }
+
+  Future<void> _processSystemSafeInscriptionMessage(
+      BlazeMessageData data, db.SafeSnapshot snapshot) async {
+    final message = Message(
+      messageId: data.messageId,
+      conversationId: data.conversationId,
+      userId: data.senderId,
+      category: data.category!,
+      content: snapshot.inscriptionHash,
+      snapshotId: snapshot.snapshotId,
+      status: data.status,
+      createdAt: data.createdAt,
+      action: snapshot.type,
+    );
+    await database.safeSnapshotDao.insert(snapshot);
+    await _insertMessage(message, data);
+    await _syncInscriptionJob
+        .add(createSyncInscriptionMessageJob(data.messageId));
+  }
+
   Future<void> _updateRemoteMessageStatus(
       String messageId, MessageStatus status) async {
     if (status != MessageStatus.delivered && status != MessageStatus.read) {
       return;
     }
-    await database.jobDao.insertNoReplace(
-        createAckJob(kAcknowledgeMessageReceipts, messageId, status));
+    await _ackJob
+        .add([createAckJob(kAcknowledgeMessageReceipts, messageId, status)]);
   }
 
   Future<void> _markMessageStatus(List<BlazeAckMessage> messages) async {
     // key: messageId, value: message expired.
-    final messagesWithExpiredAt = <Tuple2<String, int?>>[];
+    final messagesWithExpiredAt = <(String, int?)>[];
     messages
         .where((m) => m.status == 'READ' || m.status == 'MENTION_READ')
         .forEach((m) async {
       if (m.status == 'MENTION_READ') {
         await database.messageMentionDao.markMentionRead(m.messageId);
       } else if (m.status == 'READ') {
-        messagesWithExpiredAt.add(Tuple2(m.messageId, m.expireAt));
+        messagesWithExpiredAt.add((m.messageId, m.expireAt));
       }
     });
 
     if (messagesWithExpiredAt.isNotEmpty) {
-      final messageIds = messagesWithExpiredAt.map((e) => e.item1).toList();
-      await database.messageDao
-          .markMessageRead(messageIds, updateExpired: false);
+      final messageIds = messagesWithExpiredAt.map((e) => e.$1).toList();
+      final list = await database.messageDao.miniMessageByIds(messageIds).get();
+
+      await database.messageDao.markMessageRead(list, updateExpired: false);
       for (final item in messagesWithExpiredAt) {
-        final messageId = item.item1;
-        final expireAt = item.item2;
+        final (messageId, expireAt) = item;
         if (expireAt != null && expireAt > 0) {
           await database.expiredMessageDao
               .updateMessageExpireAt(expireAt, messageId);
@@ -997,9 +1102,8 @@ class DecryptMessage extends Injector {
           }
         }
       }
-      final conversationIds =
-          await database.messageDao.findConversationIdsByMessages(messageIds);
-      for (final cId in conversationIds) {
+      final set = list.map((e) => e.conversationId).toSet();
+      for (final cId in set) {
         await database.messageDao.takeUnseen(accountId, cId);
       }
     }
@@ -1086,6 +1190,7 @@ class DecryptMessage extends Injector {
           mediaDigest: Value(attachment.digest as String?),
           mediaKey: Value(attachment.key as String?),
           mediaWaveform: Value(attachment.waveform as String?),
+          caption: Value(attachment.caption),
           name: Value(attachment.name),
           thumbImage: Value(attachment.thumbnail),
           mediaDuration: Value(attachment.duration.toString()));
@@ -1110,7 +1215,8 @@ class DecryptMessage extends Injector {
       if (sticker == null ||
           (stickerMessage.albumId != null &&
               (sticker.albumId?.isEmpty ?? true))) {
-        await database.jobDao.insertUpdateStickerJob(stickerMessage.stickerId);
+        await _updateStickerJob
+            .add(createUpdateStickerJob(stickerMessage.stickerId));
       }
       await database.messageDao.updateStickerMessage(
           messageId, data.status, stickerMessage.stickerId);
@@ -1222,55 +1328,28 @@ class DecryptMessage extends Injector {
       BlazeMessageData data, List<dynamic> list) async {
     final transcripts = list
         .map((e) {
-          // ignore: avoid_dynamic_calls
-          e['created_at'] = DateTime.tryParse(e['created_at'] as String? ?? '')
-              ?.millisecondsSinceEpoch;
-          // ignore: avoid_dynamic_calls
-          e['media_created_at'] =
-              // ignore: avoid_dynamic_calls
-              DateTime.tryParse(e['media_created_at'] as String? ?? '')
+          final json = e as Map<String, dynamic>;
+
+          json['created_at'] =
+              DateTime.tryParse(json['created_at'] as String? ?? '')
                   ?.millisecondsSinceEpoch;
-          // ignore: avoid_dynamic_calls
-          final mediaDuration = e['media_duration'];
-          // ignore: avoid_dynamic_calls
-          e['media_duration'] = mediaDuration != null ? '$mediaDuration' : null;
-          return TranscriptMessage.fromJson(e as Map<String, dynamic>);
+          json['media_created_at'] =
+              DateTime.tryParse(json['media_created_at'] as String? ?? '')
+                  ?.millisecondsSinceEpoch;
+          final mediaDuration = json['media_duration'];
+          json['media_duration'] =
+              mediaDuration != null ? '$mediaDuration' : null;
+          json.remove('media_status');
+
+          return TranscriptMessage.fromJson(json);
         })
         .where((transcript) => transcript.transcriptId == data.messageId)
-        .whereNotNull()
+        .nonNulls
         .toList();
 
     if (transcripts.isEmpty) {
       await _insertInvalidMessage(data);
       return null;
-    }
-
-    Future<void> insertFts() async {
-      final contents = await Future.wait(transcripts.where((transcript) {
-        final category = transcript.category;
-        return category.isText ||
-            category.isPost ||
-            category.isData ||
-            category.isContact;
-      }).map((transcript) async {
-        final category = transcript.category;
-        if (category.isData) {
-          return transcript.mediaName;
-        }
-
-        if (category.isContact &&
-            (transcript.sharedUserId?.isNotEmpty ?? false)) {
-          return database.userDao
-              .userFullNameByUserId(transcript.sharedUserId!)
-              .getSingleOrNull();
-        }
-
-        return transcript.content;
-      }));
-
-      final join = contents.whereNotNull().join(' ');
-      await database.messageDao.insertFts(data.messageId, data.conversationId,
-          join, data.createdAt, data.userId);
     }
 
     Future _refreshSticker() => Future.wait(transcripts
@@ -1281,11 +1360,12 @@ class DecryptMessage extends Injector {
           final hasSticker =
               await database.stickerDao.hasSticker(transcript.stickerId!);
           if (hasSticker) return;
-          await database.jobDao.insertUpdateStickerJob(transcript.stickerId!);
+          await _updateStickerJob
+              .add(createUpdateStickerJob(transcript.stickerId!));
         }));
 
     Future _refreshUser() => refreshUsers([
-          ...transcripts.map((e) => e.userId).whereNotNull(),
+          ...transcripts.map((e) => e.userId).nonNulls,
           ...transcripts
               .where((transcript) =>
                   transcript.category.isContact &&
@@ -1296,14 +1376,17 @@ class DecryptMessage extends Injector {
     final attachmentTranscript =
         transcripts.where((transcript) => transcript.category.isAttachment);
 
-    final insertAllTranscriptMessageFuture = database.transcriptMessageDao
-        .insertAll(transcripts
-            .map((transcript) => transcript.copyWith(
-                mediaStatus: const Value(MediaStatus.canceled)))
-            .toList());
+    final insertAllTranscriptMessageFuture =
+        database.transcriptMessageDao.insertAll(transcripts.map((transcript) {
+      if (transcript.category.isAttachment) {
+        return transcript.copyWith(
+          mediaStatus: const Value(MediaStatus.canceled),
+        );
+      }
+      return transcript;
+    }).toList());
 
     await Future.wait([
-      insertFts(),
       _refreshSticker(),
       _refreshUser(),
       insertAllTranscriptMessageFuture,
@@ -1336,7 +1419,7 @@ class DecryptMessage extends Injector {
       }
     });
 
-    return Message(
+    final message = Message(
       messageId: data.messageId,
       conversationId: data.conversationId,
       userId: data.senderId,
@@ -1347,6 +1430,14 @@ class DecryptMessage extends Injector {
       createdAt: data.createdAt,
       mediaStatus: mediaStatus,
     );
+
+    unawaited(Future.sync(() async {
+      final content = await database.transcriptMessageDao
+          .generateTranscriptMessageFts5Content(transcripts);
+      await database.ftsDatabase.insertFts(message, content);
+    }));
+
+    return message;
   }
 }
 

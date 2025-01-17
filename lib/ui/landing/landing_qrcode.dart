@@ -2,25 +2,26 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:qr_flutter/qr_flutter.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../constants/resources.dart';
 import '../../utils/extension/extension.dart';
 import '../../utils/hook.dart';
 import '../../utils/platform.dart';
+import '../../widgets/qr_code.dart';
 import 'bloc/landing_cubit.dart';
 import 'bloc/landing_state.dart';
 import 'landing.dart';
 
-class LandingQrCodeWidget extends HookWidget {
+class LandingQrCodeWidget extends HookConsumerWidget {
   const LandingQrCodeWidget({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final locale = useMemoized(() => Localizations.localeOf(context));
 
     final landingCubit = useBloc(() => LandingQrCodeCubit(
-          context.multiAuthCubit,
+          context.multiAuthChangeNotifier,
           locale,
         ));
 
@@ -49,8 +50,8 @@ class LandingQrCodeWidget extends HookWidget {
       child = Stack(
         fit: StackFit.expand,
         children: [
-          Column(
-            children: const [
+          const Column(
+            children: [
               Spacer(),
               _QrCode(),
               Spacer(),
@@ -74,11 +75,11 @@ class LandingQrCodeWidget extends HookWidget {
   }
 }
 
-class _QrCode extends HookWidget {
+class _QrCode extends HookConsumerWidget {
   const _QrCode();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final url =
         useBlocStateConverter<LandingQrCodeCubit, LandingState, String?>(
             converter: (state) => state.authUrl);
@@ -93,11 +94,11 @@ class _QrCode extends HookWidget {
     );
 
     Widget? qrCode;
+
     if (url != null) {
-      qrCode = QrImage(
+      qrCode = QrCode(
+        image: const AssetImage(Resources.assetsImagesLogoPng),
         data: url,
-        foregroundColor: Colors.black,
-        backgroundColor: Colors.white,
       );
     }
 
@@ -113,14 +114,6 @@ class _QrCode extends HookWidget {
               fit: StackFit.expand,
               children: [
                 qrCode ?? const SizedBox(),
-                if (qrCode != null)
-                  Center(
-                    child: Image.asset(
-                      Resources.assetsImagesLogoPng,
-                      width: 36,
-                      height: 36,
-                    ),
-                  ),
                 Visibility(
                   visible: visible,
                   child: _Retry(

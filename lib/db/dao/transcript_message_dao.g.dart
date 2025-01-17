@@ -10,6 +10,40 @@ mixin _$TranscriptMessageDaoMixin on DatabaseAccessor<MixinDatabase> {
   Messages get messages => attachedDatabase.messages;
   Users get users => attachedDatabase.users;
   Stickers get stickers => attachedDatabase.stickers;
+  Addresses get addresses => attachedDatabase.addresses;
+  Apps get apps => attachedDatabase.apps;
+  Assets get assets => attachedDatabase.assets;
+  CircleConversations get circleConversations =>
+      attachedDatabase.circleConversations;
+  Circles get circles => attachedDatabase.circles;
+  FloodMessages get floodMessages => attachedDatabase.floodMessages;
+  Hyperlinks get hyperlinks => attachedDatabase.hyperlinks;
+  Jobs get jobs => attachedDatabase.jobs;
+  MessageMentions get messageMentions => attachedDatabase.messageMentions;
+  MessagesHistory get messagesHistory => attachedDatabase.messagesHistory;
+  Offsets get offsets => attachedDatabase.offsets;
+  ParticipantSession get participantSession =>
+      attachedDatabase.participantSession;
+  Participants get participants => attachedDatabase.participants;
+  ResendSessionMessages get resendSessionMessages =>
+      attachedDatabase.resendSessionMessages;
+  SentSessionSenderKeys get sentSessionSenderKeys =>
+      attachedDatabase.sentSessionSenderKeys;
+  Snapshots get snapshots => attachedDatabase.snapshots;
+  StickerAlbums get stickerAlbums => attachedDatabase.stickerAlbums;
+  StickerRelationships get stickerRelationships =>
+      attachedDatabase.stickerRelationships;
+  PinMessages get pinMessages => attachedDatabase.pinMessages;
+  Fiats get fiats => attachedDatabase.fiats;
+  FavoriteApps get favoriteApps => attachedDatabase.favoriteApps;
+  ExpiredMessages get expiredMessages => attachedDatabase.expiredMessages;
+  Chains get chains => attachedDatabase.chains;
+  Properties get properties => attachedDatabase.properties;
+  SafeSnapshots get safeSnapshots => attachedDatabase.safeSnapshots;
+  Tokens get tokens => attachedDatabase.tokens;
+  InscriptionCollections get inscriptionCollections =>
+      attachedDatabase.inscriptionCollections;
+  InscriptionItems get inscriptionItems => attachedDatabase.inscriptionItems;
   Selectable<TranscriptMessageItem> baseTranscriptMessageItem(
       BaseTranscriptMessageItem$where where,
       BaseTranscriptMessageItem$limit limit) {
@@ -47,52 +81,58 @@ mixin _$TranscriptMessageDaoMixin on DatabaseAccessor<MixinDatabase> {
           stickers,
           ...generatedwhere.watchedTables,
           ...generatedlimit.watchedTables,
-        }).map((QueryRow row) {
-      return TranscriptMessageItem(
-        transcriptId: row.read<String>('transcriptId'),
-        messageId: row.read<String>('messageId'),
-        conversationId: row.read<String>('conversationId'),
-        type: row.read<String>('type'),
-        content: row.readNullable<String>('content'),
-        createdAt: TranscriptMessages.$convertercreatedAt
-            .fromSql(row.read<int>('createdAt')),
-        status: Messages.$converterstatus.fromSql(row.read<String>('status')),
-        mediaStatus: TranscriptMessages.$convertermediaStatus
-            .fromSql(row.readNullable<String>('mediaStatus')),
-        mediaWaveform: row.readNullable<String>('mediaWaveform'),
-        mediaName: row.readNullable<String>('mediaName'),
-        mediaMimeType: row.readNullable<String>('mediaMimeType'),
-        mediaSize: row.readNullable<int>('mediaSize'),
-        mediaWidth: row.readNullable<int>('mediaWidth'),
-        mediaHeight: row.readNullable<int>('mediaHeight'),
-        thumbImage: row.readNullable<String>('thumbImage'),
-        thumbUrl: row.readNullable<String>('thumbUrl'),
-        mediaUrl: row.readNullable<String>('mediaUrl'),
-        mediaDuration: row.readNullable<String>('mediaDuration'),
-        quoteId: row.readNullable<String>('quoteId'),
-        quoteContent: row.readNullable<String>('quoteContent'),
-        sharedUserId: row.readNullable<String>('sharedUserId'),
-        userId: row.readNullable<String>('userId'),
-        userFullName: row.readNullable<String>('userFullName'),
-        userIdentityNumber: row.readNullable<String>('userIdentityNumber'),
-        appId: row.readNullable<String>('appId'),
-        relationship: Users.$converterrelationship
-            .fromSql(row.readNullable<String>('relationship')),
-        avatarUrl: row.readNullable<String>('avatarUrl'),
-        sharedUserFullName: row.readNullable<String>('sharedUserFullName'),
-        sharedUserIdentityNumber:
-            row.readNullable<String>('sharedUserIdentityNumber'),
-        sharedUserAvatarUrl: row.readNullable<String>('sharedUserAvatarUrl'),
-        sharedUserIsVerified: row.readNullable<bool>('sharedUserIsVerified'),
-        sharedUserAppId: row.readNullable<String>('sharedUserAppId'),
-        assetUrl: row.readNullable<String>('assetUrl'),
-        assetWidth: row.readNullable<int>('assetWidth'),
-        assetHeight: row.readNullable<int>('assetHeight'),
-        stickerId: row.readNullable<String>('stickerId'),
-        assetName: row.readNullable<String>('assetName'),
-        assetType: row.readNullable<String>('assetType'),
-      );
-    });
+        }).map((QueryRow row) => TranscriptMessageItem(
+          transcriptId: row.read<String>('transcriptId'),
+          messageId: row.read<String>('messageId'),
+          conversationId: row.read<String>('conversationId'),
+          type: row.read<String>('type'),
+          content: row.readNullable<String>('content'),
+          createdAt: TranscriptMessages.$convertercreatedAt
+              .fromSql(row.read<int>('createdAt')),
+          status: Messages.$converterstatus.fromSql(row.read<String>('status')),
+          mediaStatus: TranscriptMessages.$convertermediaStatus
+              .fromSql(row.readNullable<String>('mediaStatus')),
+          mediaWaveform: row.readNullable<String>('mediaWaveform'),
+          mediaName: row.readNullable<String>('mediaName'),
+          mediaMimeType: row.readNullable<String>('mediaMimeType'),
+          mediaSize: row.readNullable<int>('mediaSize'),
+          mediaWidth: row.readNullable<int>('mediaWidth'),
+          mediaHeight: row.readNullable<int>('mediaHeight'),
+          thumbImage: row.readNullable<String>('thumbImage'),
+          thumbUrl: row.readNullable<String>('thumbUrl'),
+          mediaUrl: row.readNullable<String>('mediaUrl'),
+          mediaDuration: row.readNullable<String>('mediaDuration'),
+          quoteId: row.readNullable<String>('quoteId'),
+          quoteContent: row.readNullable<String>('quoteContent'),
+          sharedUserId: row.readNullable<String>('sharedUserId'),
+          userId: row.readNullable<String>('userId'),
+          userFullName: row.readNullable<String>('userFullName'),
+          userIdentityNumber: row.readNullable<String>('userIdentityNumber'),
+          appId: row.readNullable<String>('appId'),
+          relationship: Users.$converterrelationship
+              .fromSql(row.readNullable<String>('relationship')),
+          avatarUrl: row.readNullable<String>('avatarUrl'),
+          sharedUserFullName: row.readNullable<String>('sharedUserFullName'),
+          sharedUserIdentityNumber:
+              row.readNullable<String>('sharedUserIdentityNumber'),
+          sharedUserAvatarUrl: row.readNullable<String>('sharedUserAvatarUrl'),
+          sharedUserIsVerified: row.readNullable<bool>('sharedUserIsVerified'),
+          sharedUserAppId: row.readNullable<String>('sharedUserAppId'),
+          assetUrl: row.readNullable<String>('assetUrl'),
+          assetWidth: row.readNullable<int>('assetWidth'),
+          assetHeight: row.readNullable<int>('assetHeight'),
+          stickerId: row.readNullable<String>('stickerId'),
+          assetName: row.readNullable<String>('assetName'),
+          assetType: row.readNullable<String>('assetType'),
+        ));
+  }
+
+  Selectable<int> countTranscriptMessages() {
+    return customSelect('SELECT COUNT(1) AS _c0 FROM transcript_messages',
+        variables: [],
+        readsFrom: {
+          transcriptMessages,
+        }).map((QueryRow row) => row.read<int>('_c0'));
   }
 }
 

@@ -1,20 +1,24 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 
-import '../../bloc/setting_cubit.dart';
 import '../../utils/extension/extension.dart';
-import '../../utils/hook.dart';
 import '../../widgets/app_bar.dart';
 import '../../widgets/cell.dart';
-import '../home/route/responsive_navigator_cubit.dart';
+import '../provider/responsive_navigator_provider.dart';
+import '../provider/setting_provider.dart';
 
-class StoragePage extends HookWidget {
+class StoragePage extends HookConsumerWidget {
   const StoragePage({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final settingState = useBlocState<SettingCubit, SettingState>();
+  Widget build(BuildContext context, WidgetRef ref) {
+    final (photoAutoDownload, videoAutoDownload, fileAutoDownload) =
+        ref.watch(settingProvider.select((value) => (
+              value.photoAutoDownload,
+              value.videoAutoDownload,
+              value.fileAutoDownload,
+            )));
 
     return Scaffold(
       backgroundColor: context.theme.background,
@@ -29,10 +33,7 @@ class StoragePage extends HookWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               CellGroup(
-                cellBackgroundColor: context.dynamicColor(
-                  Colors.white,
-                  darkColor: const Color.fromRGBO(255, 255, 255, 0.06),
-                ),
+                cellBackgroundColor: context.theme.settingCellBackgroundColor,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -41,10 +42,11 @@ class StoragePage extends HookWidget {
                       trailing: Transform.scale(
                           scale: 0.7,
                           child: CupertinoSwitch(
-                            activeColor: context.theme.accent,
-                            value: settingState.photoAutoDownload,
-                            onChanged: (bool value) =>
-                                context.settingCubit.photoAutoDownload = value,
+                            activeTrackColor: context.theme.accent,
+                            value: photoAutoDownload,
+                            onChanged: (bool value) => context
+                                .settingChangeNotifier
+                                .photoAutoDownload = value,
                           )),
                     ),
                     CellItem(
@@ -52,10 +54,11 @@ class StoragePage extends HookWidget {
                       trailing: Transform.scale(
                           scale: 0.7,
                           child: CupertinoSwitch(
-                            activeColor: context.theme.accent,
-                            value: settingState.videoAutoDownload,
-                            onChanged: (bool value) =>
-                                context.settingCubit.videoAutoDownload = value,
+                            activeTrackColor: context.theme.accent,
+                            value: videoAutoDownload,
+                            onChanged: (bool value) => context
+                                .settingChangeNotifier
+                                .videoAutoDownload = value,
                           )),
                     ),
                     CellItem(
@@ -63,10 +66,10 @@ class StoragePage extends HookWidget {
                       trailing: Transform.scale(
                           scale: 0.7,
                           child: CupertinoSwitch(
-                            activeColor: context.theme.accent,
-                            value: settingState.fileAutoDownload,
-                            onChanged: (bool value) =>
-                                context.settingCubit.fileAutoDownload = value,
+                            activeTrackColor: context.theme.accent,
+                            value: fileAutoDownload,
+                            onChanged: (bool value) => context
+                                .settingChangeNotifier.fileAutoDownload = value,
                           )),
                     ),
                   ],
@@ -83,15 +86,12 @@ class StoragePage extends HookWidget {
                 ),
               ),
               CellGroup(
-                cellBackgroundColor: context.dynamicColor(
-                  Colors.white,
-                  darkColor: const Color.fromRGBO(255, 255, 255, 0.06),
-                ),
+                cellBackgroundColor: context.theme.settingCellBackgroundColor,
                 child: CellItem(
                   title: Text(context.l10n.storageUsage),
-                  onTap: () => context
-                      .read<ResponsiveNavigatorCubit>()
-                      .pushPage(ResponsiveNavigatorCubit.storageUsage),
+                  onTap: () => ref
+                      .read(responsiveNavigatorProvider.notifier)
+                      .pushPage(ResponsiveNavigatorStateNotifier.storageUsage),
                 ),
               )
             ],

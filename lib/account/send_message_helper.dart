@@ -1,38 +1,38 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:cross_file/cross_file.dart';
 import 'package:drift/drift.dart';
-import 'package:flutter/rendering.dart';
 import 'package:mime/mime.dart';
 import 'package:mixin_bot_sdk_dart/mixin_bot_sdk_dart.dart';
 import 'package:uuid/uuid.dart';
 
 import '../blaze/vo/pin_message_minimal.dart';
 import '../blaze/vo/pin_message_payload.dart';
-import '../blaze/vo/recall_message.dart';
 import '../blaze/vo/transcript_minimal.dart';
-import '../constants/constants.dart';
 import '../db/dao/job_dao.dart';
 import '../db/dao/message_dao.dart';
 import '../db/dao/message_mention_dao.dart';
 import '../db/dao/participant_dao.dart';
 import '../db/dao/pin_message_dao.dart';
 import '../db/dao/transcript_message_dao.dart';
-import '../db/dao/user_dao.dart';
 import '../db/database.dart';
+import '../db/extension/job.dart';
 import '../db/mixin_database.dart';
 import '../enum/encrypt_category.dart';
 import '../enum/media_status.dart';
 import '../enum/message_category.dart';
 import '../utils/attachment/attachment_util.dart';
 import '../utils/extension/extension.dart';
+import '../utils/image.dart';
 import '../utils/load_balancer_utils.dart';
 import '../utils/logger.dart';
 import '../utils/reg_exp_utils.dart';
-import '../widgets/cache_image.dart';
+import '../widgets/message/item/action_card/action_card_data.dart';
 import '../widgets/message/send_message_dialog/attachment_extra.dart';
+import '../widgets/mixin_image.dart';
 import 'show_pin_message_key_value.dart';
 
 const jpegMimeType = 'image/jpeg';
@@ -42,6 +42,7 @@ class SendMessageHelper {
   SendMessageHelper(
     this._database,
     this._attachmentUtil,
+    this._addSendingJob,
   );
 
   final Database _database;
@@ -50,19 +51,30 @@ class SendMessageHelper {
   late final ParticipantDao _participantDao = _database.participantDao;
   late final JobDao _jobDao = _database.jobDao;
   late final PinMessageDao _pinMessageDao = _database.pinMessageDao;
-  late final UserDao _userDao = _database.userDao;
+
   late final TranscriptMessageDao _transcriptMessageDao =
       _database.transcriptMessageDao;
   final AttachmentUtil _attachmentUtil;
+  final Function(Job) _addSendingJob;
 
-  Future<void> _insertSendMessageToDb(Message message) async {
+  Future<void> _insertSendMessageToDb(
+    Message message, {
+    String? ftsContent,
+    bool cleanDraft = true,
+  }) async {
     final conversationId = message.conversationId;
     final conversation = await _database.conversationDao
         .conversationItem(conversationId)
         .getSingleOrNull();
     assert(conversation != null, 'no conversation');
     final expireIn = conversation?.expireIn ?? 0;
-    await _messageDao.insert(message, message.userId, expireIn: expireIn);
+    await _messageDao.insert(
+      message,
+      message.userId,
+      expireIn: expireIn,
+      cleanDraft: cleanDraft,
+    );
+    unawaited(_database.ftsDatabase.insertFts(message, ftsContent));
   }
 
   Future<void> sendTextMessage(
@@ -72,6 +84,7 @@ class SendMessageHelper {
     String content, {
     String? quoteMessageId,
     bool silent = false,
+    bool cleanDraft = true,
   }) async {
     var category = encryptCategory.toCategory(MessageCategory.plainText,
         MessageCategory.signalText, MessageCategory.encryptedText);
@@ -102,30 +115,60 @@ class SendMessageHelper {
       createdAt: DateTime.now(),
     );
 
-    await _insertSendMessageToDb(message);
-    await _jobDao.insertSendingJob(
+    await _insertSendMessageToDb(message, cleanDraft: cleanDraft);
+    _addSendingJob(await _jobDao.createSendingJob(
       message.messageId,
       conversationId,
       recipientId: recipientId,
       silent: silent,
-    );
+    ));
   }
 
   Future<void> sendImageMessage({
     required String conversationId,
     required String senderId,
+    required String category,
     XFile? file,
     Uint8List? bytes,
-    required String category,
     String? quoteMessageId,
     AttachmentResult? attachmentResult,
+    bool silent = false,
+    bool cleanDraft = true,
+    bool compress = false,
+    String? caption,
   }) async {
     final messageId = const Uuid().v4();
-    final _bytes = bytes ?? await file!.readAsBytes();
-    final mimeType = file?.mimeType ??
-        lookupMimeType(file?.path ?? '',
-            headerBytes: _bytes.take(defaultMagicNumbersMaxLength).toList()) ??
-        'image/jpeg';
+
+    var _bytes = bytes ?? await file?.readAsBytes();
+    if (_bytes == null) throw Exception('file is null');
+
+    final int imageWidth;
+    final int imageHeight;
+    final String mimeType;
+    final String fileName;
+
+    if (compress) {
+      final result = await compressWithIsolate(_bytes);
+      if (result == null) throw Exception('compress failed');
+      final ImageType type;
+      (_bytes, type, imageWidth, imageHeight) = result;
+      mimeType = type.mimeType;
+      fileName =
+          '${file?.name.pathBasenameWithoutExtension ?? messageId}.${type.extension}';
+    } else {
+      mimeType = file?.mimeType ??
+          lookupMimeType(file?.path ?? '',
+              headerBytes:
+                  _bytes.take(defaultMagicNumbersMaxLength).toList()) ??
+          'image/jpeg';
+      // Only retrieve image bounds info.
+      final buffer = await ui.ImmutableBuffer.fromUint8List(_bytes);
+      final descriptor = await ui.ImageDescriptor.encoded(buffer);
+
+      imageWidth = descriptor.width;
+      imageHeight = descriptor.height;
+      fileName = file?.name ?? '$messageId.${extensionFromMime(mimeType)}';
+    }
 
     var attachment = _attachmentUtil.getAttachmentFile(
       category,
@@ -135,13 +178,6 @@ class SendMessageHelper {
       mimeType: mimeType,
     );
 
-    // Only retrieve image bounds info.
-    final buffer = await ui.ImmutableBuffer.fromUint8List(_bytes);
-    final descriptor = await ui.ImageDescriptor.encoded(buffer);
-
-    final imageWidth = descriptor.width;
-    final imageHeight = descriptor.height;
-
     attachment = await attachment.create(recursive: true);
 
     await attachment.writeAsBytes(_bytes.toList());
@@ -150,7 +186,7 @@ class SendMessageHelper {
     final attachmentSize = await attachment.length();
     final quoteMessage =
         await _messageDao.findMessageItemByMessageId(quoteMessageId);
-    final fileName = file?.name ?? '$messageId.png';
+
     final message = Message(
       messageId: messageId,
       conversationId: conversationId,
@@ -169,8 +205,13 @@ class SendMessageHelper {
       quoteMessageId: quoteMessageId,
       quoteContent: quoteMessage?.toJson(),
       thumbImage: thumbImage,
+      caption: caption,
     );
-    await _insertSendMessageToDb(message);
+    await _insertSendMessageToDb(
+      message,
+      cleanDraft: cleanDraft,
+      ftsContent: caption,
+    );
 
     if (await _attachmentUtil.isNotPending(messageId)) return;
 
@@ -190,7 +231,7 @@ class SendMessageHelper {
       thumbImage,
       null,
       null,
-      null,
+      caption,
       attachmentResult.createdAt,
     );
 
@@ -201,7 +242,8 @@ class SendMessageHelper {
       attachmentResult.keys,
       attachmentResult.digest,
     );
-    await _jobDao.insertSendingJob(messageId, conversationId);
+    _addSendingJob(await _jobDao.createSendingJob(messageId, conversationId,
+        silent: silent));
   }
 
   Future<void> sendVideoMessage(
@@ -215,6 +257,8 @@ class SendMessageHelper {
     int? mediaHeight,
     String? thumbImage,
     String? mediaDuration,
+    bool silent = false,
+    bool cleanDraft = true,
   }) async {
     final messageId = const Uuid().v4();
     final mimeType = file.mimeType ?? lookupMimeType(file.path) ?? 'video/mp4';
@@ -250,7 +294,7 @@ class SendMessageHelper {
       quoteMessageId: quoteMessageId,
       quoteContent: quoteMessage?.toJson(),
     );
-    await _insertSendMessageToDb(message);
+    await _insertSendMessageToDb(message, cleanDraft: cleanDraft);
     // ignore: parameter_assignments
     attachmentResult ??=
         await _attachmentUtil.uploadAttachment(attachment, messageId, category);
@@ -279,11 +323,20 @@ class SendMessageHelper {
       attachmentResult.keys,
       attachmentResult.digest,
     );
-    await _jobDao.insertSendingJob(messageId, conversationId);
+    _addSendingJob(await _jobDao.createSendingJob(
+      messageId,
+      conversationId,
+      silent: silent,
+    ));
   }
 
-  Future<void> sendStickerMessage(String conversationId, String senderId,
-      StickerMessage stickerMessage, String category) async {
+  Future<void> sendStickerMessage(
+    String conversationId,
+    String senderId,
+    StickerMessage stickerMessage,
+    String category, {
+    bool cleanDraft = true,
+  }) async {
     final encoded = await jsonBase64EncodeWithIsolate(stickerMessage);
 
     final message = Message(
@@ -299,8 +352,9 @@ class SendMessageHelper {
       createdAt: DateTime.now(),
     );
 
-    await _insertSendMessageToDb(message);
-    await _jobDao.insertSendingJob(message.messageId, conversationId);
+    await _insertSendMessageToDb(message, cleanDraft: cleanDraft);
+    _addSendingJob(
+        await _jobDao.createSendingJob(message.messageId, conversationId));
   }
 
   Future<void> sendDataMessage(
@@ -311,6 +365,8 @@ class SendMessageHelper {
     String? quoteMessageId, {
     AttachmentResult? attachmentResult,
     String? name,
+    bool silent = false,
+    bool cleanDraft = true,
   }) async {
     final messageId = const Uuid().v4();
     final mimeType = file.mimeType ??
@@ -345,7 +401,7 @@ class SendMessageHelper {
       quoteMessageId: quoteMessageId,
       quoteContent: quoteMessage?.toJson(),
     );
-    await _insertSendMessageToDb(message);
+    await _insertSendMessageToDb(message, cleanDraft: cleanDraft);
     // ignore: parameter_assignments
     attachmentResult ??=
         await _attachmentUtil.uploadAttachment(attachment, messageId, category);
@@ -374,7 +430,11 @@ class SendMessageHelper {
       attachmentResult.keys,
       attachmentResult.digest,
     );
-    await _jobDao.insertSendingJob(messageId, conversationId);
+    _addSendingJob(await _jobDao.createSendingJob(
+      messageId,
+      conversationId,
+      silent: silent,
+    ));
   }
 
   Future<void> sendContactMessage(
@@ -384,6 +444,7 @@ class SendMessageHelper {
     String? shareUserFullName, {
     EncryptCategory encryptCategory = EncryptCategory.plain,
     String? quoteMessageId,
+    bool cleanDraft = true,
   }) async {
     final category = encryptCategory.toCategory(MessageCategory.plainContact,
         MessageCategory.signalContact, MessageCategory.encryptedContact);
@@ -404,8 +465,9 @@ class SendMessageHelper {
       quoteMessageId: quoteMessageId,
       quoteContent: quoteMessage?.toJson(),
     );
-    await _insertSendMessageToDb(message);
-    await _jobDao.insertSendingJob(message.messageId, conversationId);
+    await _insertSendMessageToDb(message, cleanDraft: cleanDraft);
+    _addSendingJob(
+        await _jobDao.createSendingJob(message.messageId, conversationId));
   }
 
   Future<void> sendAudioMessage(
@@ -417,6 +479,7 @@ class SendMessageHelper {
     AttachmentResult? attachmentResult,
     String? mediaDuration,
     String? mediaWaveform,
+    bool cleanDraft = true,
   }) async {
     final messageId = const Uuid().v4();
     final mimeType = file.mimeType ?? lookupMimeType(file.path) ?? 'audio/ogg';
@@ -451,7 +514,7 @@ class SendMessageHelper {
       quoteMessageId: quoteMessageId,
       quoteContent: quoteMessage?.toJson(),
     );
-    await _insertSendMessageToDb(message);
+    await _insertSendMessageToDb(message, cleanDraft: cleanDraft);
     // ignore: parameter_assignments
     attachmentResult ??=
         await _attachmentUtil.uploadAttachment(attachment, messageId, category);
@@ -480,18 +543,20 @@ class SendMessageHelper {
       attachmentResult.keys,
       attachmentResult.digest,
     );
-    await _jobDao.insertSendingJob(messageId, conversationId);
+    _addSendingJob(await _jobDao.createSendingJob(messageId, conversationId));
   }
 
   Future<void> _sendLiveMessage(
-      String conversationId,
-      String senderId,
-      String content,
-      String mediaUrl,
-      String thumbUrl,
-      int mediaWidth,
-      int mediaHeight,
-      EncryptCategory encryptCategory) async {
+    String conversationId,
+    String senderId,
+    String content,
+    String mediaUrl,
+    String thumbUrl,
+    int mediaWidth,
+    int mediaHeight,
+    EncryptCategory encryptCategory, {
+    bool cleanDraft = true,
+  }) async {
     final category = encryptCategory.toCategory(MessageCategory.plainLive,
         MessageCategory.signalLive, MessageCategory.encryptedLive);
     final message = Message(
@@ -508,12 +573,18 @@ class SendMessageHelper {
       mediaHeight: mediaHeight,
     );
 
-    await _insertSendMessageToDb(message);
-    await _jobDao.insertSendingJob(message.messageId, conversationId);
+    await _insertSendMessageToDb(message, cleanDraft: cleanDraft);
+    _addSendingJob(
+        await _jobDao.createSendingJob(message.messageId, conversationId));
   }
 
-  Future<void> sendPostMessage(String conversationId, String senderId,
-      String content, EncryptCategory encryptCategory) async {
+  Future<void> sendPostMessage(
+    String conversationId,
+    String senderId,
+    String content,
+    EncryptCategory encryptCategory, {
+    bool cleanDraft = true,
+  }) async {
     final category = encryptCategory.toCategory(MessageCategory.plainPost,
         MessageCategory.signalPost, MessageCategory.encryptedPost);
     final message = Message(
@@ -526,12 +597,18 @@ class SendMessageHelper {
       createdAt: DateTime.now(),
     );
 
-    await _insertSendMessageToDb(message);
-    await _jobDao.insertSendingJob(message.messageId, conversationId);
+    await _insertSendMessageToDb(message, cleanDraft: cleanDraft);
+    _addSendingJob(
+        await _jobDao.createSendingJob(message.messageId, conversationId));
   }
 
-  Future<void> _sendLocationMessage(String conversationId, String senderId,
-      String content, EncryptCategory encryptCategory) async {
+  Future<void> _sendLocationMessage(
+    String conversationId,
+    String senderId,
+    String content,
+    EncryptCategory encryptCategory, {
+    bool cleanDraft = true,
+  }) async {
     final category = encryptCategory.toCategory(MessageCategory.plainLocation,
         MessageCategory.signalLocation, MessageCategory.encryptedLocation);
     final message = Message(
@@ -544,34 +621,58 @@ class SendMessageHelper {
       createdAt: DateTime.now(),
     );
 
-    await _insertSendMessageToDb(message);
-    await _jobDao.insertSendingJob(message.messageId, conversationId);
+    await _insertSendMessageToDb(message, cleanDraft: cleanDraft);
+    _addSendingJob(
+        await _jobDao.createSendingJob(message.messageId, conversationId));
   }
 
   Future<void> sendAppCardMessage(
-      String conversationId, String senderId, String content) async {
-    d('sendAppCardMessage: $content');
+    String conversationId,
+    String senderId,
+    String content, {
+    bool cleanDraft = true,
+  }) async {
+    final Map<String, dynamic> data;
+    try {
+      data = jsonDecode(content) as Map<String, dynamic>;
+      final card = AppCardData.fromJson(data);
+      if (data['actions'] != null && !card.canShareActions) {
+        data['actions'] = null;
+      }
+      if (data['action'] == '') {
+        data['action'] = null;
+      }
+    } catch (e) {
+      w('AppCardData.fromJson error: $e');
+      return;
+    }
+
     const category = MessageCategory.appCard;
     final message = Message(
       messageId: const Uuid().v4(),
       conversationId: conversationId,
       userId: senderId,
       category: category,
-      content: content,
+      content: jsonEncode(data),
       status: MessageStatus.sending,
       createdAt: DateTime.now(),
     );
 
-    await _insertSendMessageToDb(message);
-    await _jobDao.insertSendingJob(message.messageId, conversationId);
+    await _insertSendMessageToDb(message, cleanDraft: cleanDraft);
+    _addSendingJob(
+        await _jobDao.createSendingJob(message.messageId, conversationId));
   }
 
   Future<void> sendRecallMessage(
-      String conversationId, List<String> messageIds) async {
+    String conversationId,
+    List<String> messageIds,
+  ) async {
     await Future.wait(messageIds.map((messageId) async {
       final message = await _messageDao.findMessageByMessageId(messageId);
 
       await _messageDao.recallMessage(conversationId, messageId);
+
+      unawaited(_database.ftsDatabase.deleteByMessageId(messageId));
 
       await Future.wait([
         (() async {
@@ -583,17 +684,12 @@ class SendMessageHelper {
             }
           }
         })(),
-        _messageDao.deleteFtsByMessageId(messageId),
-        _messageMentionDao.deleteMessageMentionByMessageId(messageId),
-        _jobDao.insert(Job(
+        _messageMentionDao.deleteMessageMention(MessageMention(
+          messageId: messageId,
           conversationId: conversationId,
-          jobId: const Uuid().v4(),
-          action: kRecallMessage,
-          priority: 5,
-          blazeMessage: await jsonEncodeWithIsolate(RecallMessage(messageId)),
-          createdAt: DateTime.now(),
-          runCount: 0,
         )),
+        (() async => _addSendingJob(
+            await createSendRecallJob(conversationId, messageId)))(),
         (() async {
           final quoteMessage =
               await _messageDao.findMessageItemById(conversationId, messageId);
@@ -611,8 +707,11 @@ class SendMessageHelper {
   }
 
   Future<void> forwardMessage(
-      String conversationId, String senderId, String forwardMessageId,
-      {EncryptCategory encryptCategory = EncryptCategory.plain}) async {
+    String conversationId,
+    String senderId,
+    String forwardMessageId, {
+    EncryptCategory encryptCategory = EncryptCategory.plain,
+  }) async {
     final message = await _messageDao.findMessageByMessageId(forwardMessageId);
     if (message == null) {
       return;
@@ -622,6 +721,7 @@ class SendMessageHelper {
         senderId,
         encryptCategory,
         message.content!,
+        cleanDraft: false,
       );
     } else if (message.category.isImage) {
       final category = encryptCategory.toCategory(MessageCategory.plainImage,
@@ -638,8 +738,10 @@ class SendMessageHelper {
           conversationId: message.conversationId,
           fileName: message.mediaUrl,
         )),
+        caption: message.caption,
         category: category,
         attachmentResult: attachmentResult,
+        cleanDraft: false,
       );
     } else if (message.category.isVideo) {
       final category = encryptCategory.toCategory(MessageCategory.plainVideo,
@@ -663,6 +765,7 @@ class SendMessageHelper {
         mediaHeight: message.mediaHeight,
         mediaWidth: message.mediaWidth,
         thumbImage: message.thumbImage,
+        cleanDraft: false,
       );
     } else if (message.category.isAudio) {
       final category = encryptCategory.toCategory(MessageCategory.plainAudio,
@@ -684,6 +787,7 @@ class SendMessageHelper {
         attachmentResult: attachmentResult,
         mediaDuration: message.mediaDuration,
         mediaWaveform: message.mediaWaveform,
+        cleanDraft: false,
       );
     } else if (message.category.isData) {
       final category = encryptCategory.toCategory(MessageCategory.plainData,
@@ -705,14 +809,17 @@ class SendMessageHelper {
         null,
         attachmentResult: attachmentResult,
         name: message.name,
+        cleanDraft: false,
       );
     } else if (message.category.isSticker) {
       await sendStickerMessage(
-          conversationId,
-          senderId,
-          StickerMessage(message.stickerId!, null, null),
-          encryptCategory.toCategory(MessageCategory.plainSticker,
-              MessageCategory.signalSticker, MessageCategory.encryptedSticker));
+        conversationId,
+        senderId,
+        StickerMessage(message.stickerId!, null, null),
+        encryptCategory.toCategory(MessageCategory.plainSticker,
+            MessageCategory.signalSticker, MessageCategory.encryptedSticker),
+        cleanDraft: false,
+      );
     } else if (message.category.isContact) {
       await sendContactMessage(
         conversationId,
@@ -720,6 +827,7 @@ class SendMessageHelper {
         ContactMessage(message.sharedUserId!),
         message.name,
         encryptCategory: encryptCategory,
+        cleanDraft: false,
       );
     } else if (message.category.isLive) {
       var shareable = true;
@@ -741,22 +849,39 @@ class SendMessageHelper {
       );
       final encoded = await jsonEncodeWithIsolate(liveMessage);
       await _sendLiveMessage(
-          conversationId,
-          senderId,
-          encoded,
-          message.mediaUrl!,
-          message.thumbUrl ?? '',
-          message.mediaWidth!,
-          message.mediaHeight!,
-          encryptCategory);
+        conversationId,
+        senderId,
+        encoded,
+        message.mediaUrl!,
+        message.thumbUrl ?? '',
+        message.mediaWidth!,
+        message.mediaHeight!,
+        encryptCategory,
+        cleanDraft: false,
+      );
     } else if (message.category.isPost) {
       await sendPostMessage(
-          conversationId, senderId, message.content!, encryptCategory);
+        conversationId,
+        senderId,
+        message.content!,
+        encryptCategory,
+        cleanDraft: false,
+      );
     } else if (message.category.isLocation) {
       await _sendLocationMessage(
-          conversationId, senderId, message.content!, encryptCategory);
+        conversationId,
+        senderId,
+        message.content!,
+        encryptCategory,
+        cleanDraft: false,
+      );
     } else if (message.category == MessageCategory.appCard) {
-      await sendAppCardMessage(conversationId, senderId, message.content!);
+      await sendAppCardMessage(
+        conversationId,
+        senderId,
+        message.content!,
+        cleanDraft: false,
+      );
     } else if (message.category.isTranscript) {
       final transcripts = await _transcriptMessageDao
           .transcriptMessageByTranscriptId(message.messageId)
@@ -766,6 +891,7 @@ class SendMessageHelper {
         senderId: senderId,
         transcripts: transcripts,
         encryptCategory: encryptCategory,
+        cleanDraft: false,
       );
     }
   }
@@ -775,6 +901,7 @@ class SendMessageHelper {
     required String senderId,
     required List<TranscriptMessage> transcripts,
     EncryptCategory encryptCategory = EncryptCategory.plain,
+    bool cleanDraft = true,
   }) async {
     final messageId = const Uuid().v4();
 
@@ -821,52 +948,21 @@ class SendMessageHelper {
       mediaStatus: hasAttachments ? MediaStatus.canceled : MediaStatus.done,
     );
 
-    Future<void> insertFts() async {
-      final contents = await Future.wait(transcriptMessages.where((transcript) {
-        final category = transcript.category;
-        return category.isText ||
-            category.isPost ||
-            category.isData ||
-            category.isContact;
-      }).map((transcript) async {
-        final category = transcript.category;
-        if (category.isData) {
-          return transcript.mediaName;
-        }
-
-        if (category.isContact &&
-            (transcript.sharedUserId?.isNotEmpty ?? false)) {
-          return _userDao
-              .userFullNameByUserId(transcript.sharedUserId!)
-              .getSingleOrNull();
-        }
-
-        return transcript.content;
-      }));
-
-      final join = contents.whereNotNull().join(' ');
-      await _messageDao.insertFts(
-        messageId,
-        conversationId,
-        join,
-        DateTime.now(),
-        senderId,
-      );
-    }
-
     await Future.wait([
       _transcriptMessageDao.insertAll(transcriptMessages),
-      insertFts(),
-      _insertSendMessageToDb(message),
+      _insertSendMessageToDb(message,
+          ftsContent: await _transcriptMessageDao
+              .generateTranscriptMessageFts5Content(transcriptMessages),
+          cleanDraft: cleanDraft),
     ]);
 
     if (hasAttachments) {
       await reUploadTranscriptAttachment(message.messageId);
     } else {
-      await _jobDao.insertSendingJob(
+      _addSendingJob(await _jobDao.createSendingJob(
         message.messageId,
         conversationId,
-      );
+      ));
     }
   }
 
@@ -881,10 +977,10 @@ class SendMessageHelper {
         .get();
 
     if (!transcripts.any((element) => element.category.isAttachment)) {
-      await _jobDao.insertSendingJob(
+      _addSendingJob(await _jobDao.createSendingJob(
         message.messageId,
         message.conversationId,
-      );
+      ));
       return;
     }
 
@@ -936,7 +1032,7 @@ class SendMessageHelper {
         final newCategory = encryptCategory?.asCategory(category) ?? category;
         final attachmentResult = await _attachmentUtil.uploadAttachment(
           File(absolutePath),
-          messageId,
+          transcriptMessage.messageId,
           newCategory,
           transcriptId: transcriptMessage.transcriptId,
         );
@@ -982,11 +1078,12 @@ class SendMessageHelper {
         message.messageId,
         MediaStatus.done,
       );
-      await _jobDao.insertSendingJob(
+      _addSendingJob(await _jobDao.createSendingJob(
         message.messageId,
         message.conversationId,
-      );
-    } catch (_) {
+      ));
+    } catch (error, stacktrace) {
+      e('reUploadTranscriptAttachment error: $error, stacktrace: $stacktrace');
       await _messageDao.updateMediaStatus(
         message.messageId,
         MediaStatus.canceled,
@@ -1039,7 +1136,7 @@ class SendMessageHelper {
       attachmentResult.keys,
       attachmentResult.digest,
     );
-    await _jobDao.insertSendingJob(messageId, conversationId);
+    _addSendingJob(await _jobDao.createSendingJob(messageId, conversationId));
   }
 
   Future<AttachmentResult?> _checkAttachmentExtra(Message message) async {
@@ -1135,6 +1232,7 @@ class SendMessageHelper {
             quoteMessageId: pinMessageMinimal.messageId,
           ),
           senderId,
+          cleanDraft: false,
         );
       });
       unawaited(ShowPinMessageKeyValue.instance.show(conversationId));
@@ -1143,20 +1241,7 @@ class SendMessageHelper {
           .deleteByIds(pinMessageMinimals.map((e) => e.messageId).toList());
     }
 
-    _messageDao.notifyMessageInsertOrReplaced(
-        pinMessageMinimals.map((e) => e.messageId));
-
-    await _jobDao.insert(
-      Job(
-        conversationId: conversationId,
-        jobId: const Uuid().v4(),
-        action: kPinMessage,
-        priority: 5,
-        blazeMessage: encoded,
-        createdAt: DateTime.now(),
-        runCount: 0,
-      ),
-    );
+    _addSendingJob(createSendPinJob(conversationId, encoded));
   }
 
   Future<void> sendImageMessageByUrl(
@@ -1171,8 +1256,6 @@ class SendMessageHelper {
   }) async {
     final messageId = const Uuid().v4();
     final defaultMimeType = defaultGifMimeType ? gifMimeType : jpegMimeType;
-    var _width = width;
-    var _height = height;
 
     Future<Message> insertMessage(
         int? width, int? height, String mimeType) async {
@@ -1196,29 +1279,28 @@ class SendMessageHelper {
       return message;
     }
 
-    final hasSize = width != null && height != null && defaultGifMimeType;
-    if (hasSize) await insertMessage(width, height, defaultMimeType);
+    if (width != null && height != null && defaultGifMimeType) {
+      await insertMessage(width, height, defaultMimeType);
+    }
 
-    Uint8List? sendImageBytes;
+    (Uint8List, ImageType, int, int)? result;
     try {
-      sendImageBytes = await downloadImage(url);
+      final data = await downloadImage(url);
+      if (data != null) {
+        result = await compressWithIsolate(data);
+      }
     } catch (error, stacktrace) {
       e('failed to download image: $error $stacktrace');
     }
-    if (sendImageBytes == null) {
+    if (result == null) {
       e('failed to get send image bytes. $url');
-      if (!hasSize) await insertMessage(width, height, defaultMimeType);
       await _messageDao.updateMediaStatus(messageId, MediaStatus.canceled);
       return;
-    } else if (!hasSize) {
-      final image = await decodeImageFromList(sendImageBytes);
-      final mimeType = lookupMimeType(url,
-          headerBytes:
-              sendImageBytes.take(defaultMagicNumbersMaxLength).toList());
-      _width = image.width;
-      _height = image.height;
-      await insertMessage(_width, _height, mimeType ?? defaultMimeType);
     }
+
+    final (data, type, _width, _height) = result;
+
+    await insertMessage(_width, _height, type.mimeType);
 
     var attachment = _attachmentUtil.getAttachmentFile(
       category,
@@ -1228,7 +1310,7 @@ class SendMessageHelper {
       mimeType: defaultMimeType,
     );
     attachment = await attachment.create(recursive: true);
-    await attachment.writeAsBytes(sendImageBytes);
+    await attachment.writeAsBytes(data);
     final thumbImage = await attachment.encodeBlurHash();
     final mediaSize = await attachment.length();
     await _messageDao.updateGiphyMessage(
@@ -1269,7 +1351,7 @@ class SendMessageHelper {
       attachmentResult.keys,
       attachmentResult.digest,
     );
-    await _jobDao.insertSendingJob(messageId, conversationId);
+    _addSendingJob(await _jobDao.createSendingJob(messageId, conversationId));
   }
 
   Future<void> reUploadGiphyGif(MessageItem message) async {
@@ -1342,6 +1424,7 @@ class SendMessageHelper {
       attachmentResult.keys,
       attachmentResult.digest,
     );
-    await _jobDao.insertSendingJob(message.messageId, message.conversationId);
+    _addSendingJob(await _jobDao.createSendingJob(
+        message.messageId, message.conversationId));
   }
 }

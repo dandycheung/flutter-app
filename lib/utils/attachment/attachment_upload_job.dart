@@ -17,6 +17,7 @@ class _AttachmentUploadJobOption {
     required this.keys,
     required this.iv,
     required this.sendPort,
+    required this.proxy,
   });
 
   final String path;
@@ -24,6 +25,7 @@ class _AttachmentUploadJobOption {
   final List<int>? keys;
   final List<int>? iv;
   final SendPort sendPort;
+  final ProxyConfig? proxy;
 }
 
 class _AttachmentUploadJob extends _AttachmentJobBase {
@@ -42,6 +44,7 @@ class _AttachmentUploadJob extends _AttachmentJobBase {
   late final ReceivePort? _receivePort;
 
   Future<List<int>?> upload(
+    ProxyConfig? proxy,
     void Function(int count, int total) sendProgress,
   ) async {
     late Isolate? isolate;
@@ -49,20 +52,22 @@ class _AttachmentUploadJob extends _AttachmentJobBase {
     final completer = Completer<List<int>?>();
 
     _receivePort!.listen((message) {
-      if (message == _killMessage) {
-        isolate?.kill();
-        isolate = null;
-        if (completer.isCompleted) return;
-        completer.completeError(Exception('receive kill message'));
-      }
-
-      if (message is Tuple2<int, int>) {
-        updateProgress(message.item1, message.item2);
-        sendProgress(message.item1, message.item2);
-        return;
-      }
       if (message is List<int>?) {
         completer.complete(message);
+        return;
+      }
+
+      switch (message) {
+        case (final int received, final int total):
+          updateProgress(received, total);
+          sendProgress(received, total);
+          return;
+        case _killMessage:
+          isolate?.kill();
+          isolate = null;
+          if (completer.isCompleted) return;
+          completer.completeError(Exception('receive kill message'));
+          return;
       }
     });
 
@@ -73,7 +78,8 @@ class _AttachmentUploadJob extends _AttachmentJobBase {
           url: url,
           keys: keys,
           iv: iv,
-          sendPort: _receivePort!.sendPort,
+          sendPort: _receivePort.sendPort,
+          proxy: proxy,
         ));
 
     return completer.future;
@@ -84,6 +90,8 @@ class _AttachmentUploadJob extends _AttachmentJobBase {
 }
 
 Future<void> _upload(_AttachmentUploadJobOption options) async {
+  await rhttp.Rhttp.init();
+
   List<int>? digest;
   final cancelToken = CancelToken();
 
@@ -109,9 +117,13 @@ Future<void> _upload(_AttachmentUploadJobOption options) async {
   }
 
   try {
+    _dio.applyProxy(options.proxy);
     final response = await _dio.putUri(
       Uri.parse(options.url),
-      data: uploadStream,
+      data: uploadStream.handleError((error, stacktrace) {
+        e('uploadStream error: $error $stacktrace');
+        throw Exception(error);
+      }),
       options: Options(
         headers: {
           ..._uploadHeaders,
@@ -119,7 +131,7 @@ Future<void> _upload(_AttachmentUploadJobOption options) async {
         },
       ),
       onSendProgress: (int count, int total) =>
-          options.sendPort.send(Tuple2(count, total)),
+          options.sendPort.send((count, total)),
       cancelToken: cancelToken,
     );
 
@@ -130,6 +142,9 @@ Future<void> _upload(_AttachmentUploadJobOption options) async {
     options.sendPort.send(digest);
   } catch (error, stacktrace) {
     e('failed to upload attachment $error, $stacktrace');
+    if (error is DioException) {
+      e('original stacktrace: ${error.stackTrace}');
+    }
+    options.sendPort.send(_killMessage);
   }
-  options.sendPort.send(_killMessage);
 }

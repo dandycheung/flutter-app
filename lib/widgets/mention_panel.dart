@@ -5,46 +5,48 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:flutter_portal/flutter_portal.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../db/mixin_database.dart' hide Offset;
-import '../ui/home/bloc/conversation_cubit.dart';
-import '../ui/home/bloc/mention_cubit.dart';
 import '../ui/home/intent.dart';
+import '../ui/provider/conversation_provider.dart';
+import '../ui/provider/mention_provider.dart';
 import '../utils/extension/extension.dart';
-import '../utils/hook.dart';
 import '../utils/platform.dart';
 import '../utils/reg_exp_utils.dart';
 import 'avatar_view/avatar_view.dart';
 import 'high_light_text.dart';
 import 'interactive_decorated_box.dart';
 
-const kMentionItemHeight = 48.0;
+const kMentionItemHeight = 50.0;
 
-class MentionPanelPortalEntry extends HookWidget {
+class MentionPanelPortalEntry extends HookConsumerWidget {
   const MentionPanelPortalEntry({
-    super.key,
     required this.constraints,
     required this.textEditingController,
     required this.child,
+    required this.mentionProviderInstance,
+    super.key,
   });
 
   final BoxConstraints constraints;
   final TextEditingController textEditingController;
   final Widget child;
+  final AutoDisposeStateNotifierProvider<MentionStateNotifier, MentionState>
+      mentionProviderInstance;
 
   @override
-  Widget build(BuildContext context) {
-    final mentionState = useBlocState<MentionCubit, MentionState>();
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scrollController = ref.watch(mentionProviderInstance.notifier
+        .select((value) => value.scrollController));
+    final mentionState = ref.watch(mentionProviderInstance);
     final visible = mentionState.users.isNotEmpty;
 
     final selectable =
         useValueListenable(textEditingController).composing.composed && visible;
 
-    final isGroupOrBot =
-        useBlocStateConverter<ConversationCubit, ConversationState?, bool>(
-      converter: (state) =>
-          (state?.isGroup ?? false) || (state?.isBot ?? false),
-    );
+    final isGroupOrBot = ref.watch(conversationProvider
+        .select((value) => (value?.isGroup == true) || (value?.isBot == true)));
 
     return FocusableActionDetector(
       enabled: selectable,
@@ -70,14 +72,16 @@ class MentionPanelPortalEntry extends HookWidget {
       },
       actions: {
         ListSelectionNextIntent: CallbackAction<Intent>(
-          onInvoke: (Intent intent) => context.read<MentionCubit>().next(),
+          onInvoke: (Intent intent) =>
+              ref.read(mentionProviderInstance.notifier).next(),
         ),
         ListSelectionPrevIntent: CallbackAction<Intent>(
-          onInvoke: (Intent intent) => context.read<MentionCubit>().prev(),
+          onInvoke: (Intent intent) =>
+              ref.read(mentionProviderInstance.notifier).prev(),
         ),
         ListSelectionSelectedIntent: CallbackAction<Intent>(
           onInvoke: (Intent intent) {
-            final state = context.read<MentionCubit>().state;
+            final state = ref.read(mentionProviderInstance);
             _select(state.users[state.index]);
           },
         ),
@@ -106,6 +110,7 @@ class MentionPanelPortalEntry extends HookWidget {
               ),
               child: _MentionPanel(
                 mentionState: mentionState,
+                scrollController: scrollController,
                 onSelect: _select,
               ),
             ),
@@ -141,10 +146,12 @@ class _MentionPanel extends StatelessWidget {
   const _MentionPanel({
     required this.mentionState,
     required this.onSelect,
+    required this.scrollController,
   });
 
   final MentionState mentionState;
   final Function(User user) onSelect;
+  final ScrollController scrollController;
 
   @override
   Widget build(BuildContext context) => DecoratedBox(
@@ -152,7 +159,7 @@ class _MentionPanel extends StatelessWidget {
           color: context.theme.popUp,
         ),
         child: ListView.builder(
-          controller: context.read<MentionCubit>().scrollController,
+          controller: scrollController,
           itemCount: mentionState.users.length,
           shrinkWrap: true,
           itemBuilder: (BuildContext context, int index) => _MentionItem(
@@ -199,37 +206,41 @@ class _MentionItem extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  HighlightText(
+                  CustomText(
                     user.fullName ?? '',
                     style: TextStyle(
                       fontSize: 14,
                       color: context.theme.text,
                       height: 1,
                     ),
-                    highlightTextSpans: [
-                      HighlightTextSpan(
-                        keyword ?? '',
-                        style: TextStyle(
-                          color: context.theme.accent,
+                    textMatchers: [
+                      EmojiTextMatcher(),
+                      if (keyword != null)
+                        KeyWordTextMatcher(
+                          keyword!,
+                          style: TextStyle(
+                            color: context.theme.accent,
+                          ),
                         ),
-                      ),
                     ],
                     maxLines: 1,
                   ),
                   const SizedBox(height: 2),
-                  HighlightText(
+                  CustomText(
                     user.identityNumber,
                     style: TextStyle(
                       fontSize: 12,
                       color: context.theme.secondaryText,
                     ),
-                    highlightTextSpans: [
-                      HighlightTextSpan(
-                        keyword ?? '',
-                        style: TextStyle(
-                          color: context.theme.accent,
+                    textMatchers: [
+                      EmojiTextMatcher(),
+                      if (keyword != null)
+                        KeyWordTextMatcher(
+                          keyword!,
+                          style: TextStyle(
+                            color: context.theme.accent,
+                          ),
                         ),
-                      )
                     ],
                     maxLines: 1,
                   ),

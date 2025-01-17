@@ -5,7 +5,8 @@ import 'package:url_launcher/url_launcher.dart';
 import '../constants/constants.dart';
 import '../crypto/uuid/uuid.dart';
 import '../db/mixin_database.dart' hide User;
-import '../ui/home/bloc/conversation_cubit.dart';
+import '../enum/encrypt_category.dart';
+import '../ui/provider/conversation_provider.dart';
 import '../widgets/conversation/conversation_dialog.dart';
 import '../widgets/message/item/action_card/action_card_data.dart';
 import '../widgets/message/item/transfer/transfer_page.dart';
@@ -51,8 +52,9 @@ Future<bool> openUri(
   if (uri.scheme.isEmpty) return Future.value(false);
 
   if (uri.isMixin) {
-    if (uri.userId != null && uri.userId!.trim().isNotEmpty) {
-      await showUserDialog(context, uri.userId);
+    final userId = uri.userId;
+    if (userId != null && userId.trim().isNotEmpty) {
+      await showUserDialog(context, userId);
       return true;
     }
 
@@ -67,13 +69,59 @@ Future<bool> openUri(
     }
 
     final conversationId = uri.conversationId;
+    final startText = uri.startTextOfConversation;
     if (conversationId != null && conversationId.trim().isNotEmpty) {
+      if (startText?.trim().isNotEmpty == true) {
+        try {
+          final conversation = await context.database.conversationDao
+              .conversationItem(conversationId)
+              .getSingleOrNull();
+
+          if (conversation == null) {
+            showToastFailed(null);
+            return false;
+          }
+
+          await ConversationStateNotifier.selectConversation(
+            context,
+            conversation.conversationId,
+            conversation: conversation,
+          );
+
+          await context.accountServer.sendTextMessage(
+            startText ?? '',
+            EncryptCategory.plain,
+            conversationId: conversationId,
+          );
+
+          return true;
+        } catch (error) {
+          showToastFailed(error);
+          return false;
+        }
+      }
+
       return _selectConversation(uri, context, conversationId);
     }
 
     if (uri.isSend) {
       return showSendDialog(context, uri.categoryOfSend,
-          uri.conversationIdOfSend, uri.dataOfSend, app);
+          uri.conversationIdOfSend, uri.dataOfSend, app, uri.userOfSend);
+    }
+
+    if (uri.isPay) {
+      await showUnknownMixinUrlDialog(context, uri);
+      return false;
+    }
+
+    if (uri.isMultisigs) {
+      await showUnknownMixinUrlDialog(context, uri);
+      return false;
+    }
+
+    if (uri.isSwap || uri.isMarkets) {
+      await showUnknownMixinUrlDialog(context, uri);
+      return false;
     }
 
     if (uri.appId != null) {
@@ -231,18 +279,29 @@ Future<bool> _selectConversation(
       showToastFailed(null);
       return false;
     } else {
-      await ConversationCubit.selectUser(context, userId);
+      await ConversationStateNotifier.selectUser(context, userId);
       return true;
     }
   }
 
-  await ConversationCubit.selectConversation(
+  await ConversationStateNotifier.selectConversation(
     context,
     conversationId,
     sync: true,
     checkCurrentUserExist: true,
   );
   return true;
+}
+
+extension MixinUriExt on Uri {
+  bool get isSendToUser => !userOfSend.isNullOrBlank();
+
+  bool get isHttpsSendUrl => _isTypeHost(MixinSchemeHost.send);
+
+  bool get isMixinActionUrl =>
+      isMixin &&
+      pathSegments.isNotEmpty &&
+      MixinSchemeHost.values.any((e) => e.name == pathSegments.first);
 }
 
 extension _MixinUriExtension on Uri {
@@ -286,7 +345,31 @@ extension _MixinUriExtension on Uri {
     }
   }
 
-  bool get isSend => _isTypeScheme(MixinSchemeHost.send);
+  bool get isSend =>
+      _isTypeScheme(MixinSchemeHost.send) || _isTypeHost(MixinSchemeHost.send);
+
+  bool get isPay => _isTypeHost(MixinSchemeHost.pay);
+
+  bool get isMultisigs => _isTypeHost(MixinSchemeHost.multisigs);
+
+  bool get isSwap =>
+      _isTypeHost(MixinSchemeHost.swap) || _isTypeScheme(MixinSchemeHost.swap);
+
+  bool get isMarkets =>
+      _isTypeHost(MixinSchemeHost.markets) ||
+      _isTypeScheme(MixinSchemeHost.markets);
+
+  String? get startTextOfConversation {
+    if (!isMixin) return null;
+    return queryParameters['start'];
+  }
+
+  String? get userOfSend {
+    if (!isSend) {
+      return null;
+    }
+    return queryParameters['user'];
+  }
 
   String? get categoryOfSend {
     if (!isSend) return null;

@@ -2,6 +2,7 @@ import 'package:collection/collection.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:flutter_svg/svg.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:sliver_tools/sliver_tools.dart';
@@ -16,18 +17,18 @@ import '../../../../widgets/message/item/file_message.dart';
 import '../../../../widgets/message/message.dart';
 import '../shared_media_page.dart';
 
-class FilePage extends HookWidget {
+class FilePage extends HookConsumerWidget {
   const FilePage({
-    super.key,
     required this.maxHeight,
     required this.conversationId,
+    super.key,
   });
 
   final double maxHeight;
   final String conversationId;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final size = useMemoized(() => maxHeight / 90 * 2, [maxHeight]).toInt();
     final messageDao = context.database.messageDao;
 
@@ -38,11 +39,10 @@ class FilePage extends HookWidget {
         loadMoreData: (list) async {
           if (list.isEmpty) return [];
           final last = list.last;
-          final rowId =
-              await messageDao.messageRowId(last.messageId).getSingleOrNull();
-          if (rowId == null) return [];
+          final info = await messageDao.messageOrderInfo(last.messageId);
+          if (info == null) return [];
           final items = await messageDao
-              .fileMessagesBefore(rowId, conversationId, size)
+              .fileMessagesBefore(info, conversationId, size)
               .get();
           return [...list, ...items];
         },
@@ -51,15 +51,14 @@ class FilePage extends HookWidget {
       keys: [conversationId],
     );
     useEffect(
-      () => messageDao.insertOrReplaceMessageStream
+      () => messageDao
+          .watchInsertOrReplaceMessageStream(conversationId)
           .switchMap<MessageItem>((value) async* {
             for (final item in value) {
               yield item;
             }
           })
-          .where((event) =>
-              event.conversationId == conversationId &&
-              [
+          .where((event) => [
                 MessageCategory.plainData,
                 MessageCategory.signalData,
               ].contains(event.type))
@@ -89,7 +88,7 @@ class FilePage extends HookWidget {
             SvgPicture.asset(
               Resources.assetsImagesEmptyFileSvg,
               colorFilter: ColorFilter.mode(
-                context.theme.secondaryText.withOpacity(0.4),
+                context.theme.secondaryText.withValues(alpha: 0.4),
                 BlendMode.srcIn,
               ),
             ),

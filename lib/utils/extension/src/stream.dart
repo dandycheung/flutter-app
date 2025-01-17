@@ -1,5 +1,44 @@
 part of '../extension.dart';
 
+extension ThrottleExtensions<T> on Stream<T> {
+  Stream<T> throttleTime(Duration duration) {
+    DateTime? lastTime;
+    Timer? timer;
+    late T lastData;
+
+    return transform(StreamTransformer.fromHandlers(
+      handleData: (data, sink) {
+        void add(T event) {
+          timer?.cancel();
+          timer = null;
+          lastTime = DateTime.now();
+          sink.add(event);
+        }
+
+        if (lastTime == null) {
+          add(data);
+        } else {
+          final now = DateTime.now();
+          final diff = now.difference(lastTime!);
+          if (diff >= duration) {
+            add(data);
+          } else {
+            lastData = data;
+            timer?.cancel();
+            timer = Timer(duration - diff, () {
+              add(lastData);
+            });
+          }
+        }
+      },
+      handleDone: (sink) {
+        timer?.cancel();
+        sink.close();
+      },
+    ));
+  }
+}
+
 extension StreamExtensionWhereNotNull<T> on Stream<T?> {
   Stream<T> whereNotNull() => where((e) => e != null).cast<T>();
 }
@@ -31,8 +70,10 @@ extension StreamExtension<T> on Stream<T> {
     });
   }
 
-  StreamSubscription asyncListen<E>(FutureOr<E> Function(T event) convert) =>
-      asyncMap((e) => convert(e)).listen((_) {});
+  StreamSubscription asyncListen<E>(FutureOr<E> Function(T event) convert,
+          {Function? onError, void Function()? onDone, bool? cancelOnError}) =>
+      asyncMap((e) => convert(e)).listen((_) {},
+          onError: onError, onDone: onDone, cancelOnError: cancelOnError);
 
   Stream<E> asyncBufferMap<E>(FutureOr<E> Function(List<T> event) convert) {
     StreamController<E> controller;

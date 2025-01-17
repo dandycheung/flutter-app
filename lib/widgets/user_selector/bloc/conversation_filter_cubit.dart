@@ -1,24 +1,28 @@
 import 'package:bloc/bloc.dart';
-import 'package:collection/collection.dart';
 import 'package:equatable/equatable.dart';
 
 import '../../../account/account_server.dart';
-import '../../../db/extension/conversation.dart';
-import '../../../db/extension/user.dart';
+import '../../../db/dao/conversation_dao.dart';
 import '../../../db/mixin_database.dart';
+import '../../../utils/extension/extension.dart';
 import '../../../utils/sort.dart';
 
 part 'conversation_filter_state.dart';
 
 class ConversationFilterCubit extends Cubit<ConversationFilterState> {
-  ConversationFilterCubit(this.accountServer, this.onlyContact, this.afterInit)
-      : super(const ConversationFilterState()) {
+  ConversationFilterCubit(
+    this.accountServer,
+    this.onlyContact,
+    this.filteredIds,
+    this.afterInit,
+  ) : super(const ConversationFilterState()) {
     _init();
   }
 
   final AccountServer accountServer;
   final bool onlyContact;
   final Function(ConversationFilterState) afterInit;
+  final Iterable<String> filteredIds;
 
   late List<ConversationItem> conversations;
   late List<User> friends;
@@ -36,12 +40,13 @@ class ConversationFilterCubit extends Cubit<ConversationFilterState> {
       contactConversationIds = conversations
           .where((element) =>
               element.isContactConversation && element.ownerId != null)
-          .map((e) => e.ownerId!)
+          .map((e) => e.ownerId)
+          .nonNulls
           .toSet();
       botConversationIds = conversations
           .where((element) => element.isBotConversation)
           .map((e) => e.appId)
-          .whereNotNull()
+          .nonNulls
           .toSet();
     }
 
@@ -53,7 +58,9 @@ class ConversationFilterCubit extends Cubit<ConversationFilterState> {
       ...contactConversationIds,
       ...botConversationIds,
     ]).get();
-    users.forEach((e) {
+    users
+        .where((element) => !filteredIds.contains(element.userId))
+        .forEach((e) {
       if (e.isBot) {
         bots.add(e);
       } else {

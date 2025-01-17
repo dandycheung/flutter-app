@@ -1,13 +1,16 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 
-import '../bloc/keyword_cubit.dart';
+import '../constants/constants.dart';
 import '../constants/resources.dart';
-import '../ui/home/bloc/conversation_filter_unseen_cubit.dart';
 import '../ui/home/home.dart';
+import '../ui/provider/conversation_unseen_filter_enabled.dart';
+import '../ui/provider/keyword_provider.dart';
 import '../utils/extension/extension.dart';
 import '../utils/hook.dart';
 import 'action_button.dart';
@@ -19,11 +22,18 @@ import 'toast.dart';
 import 'user/user_dialog.dart';
 import 'window/move_window.dart';
 
-class SearchBar extends HookWidget {
+enum _ActionType {
+  searchContact,
+  createConversation,
+  createGroup,
+  createCircle,
+}
+
+class SearchBar extends HookConsumerWidget {
   const SearchBar({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final hasDrawer = context.watch<HasDrawerValueNotifier>();
 
     Widget? leading;
@@ -38,7 +48,7 @@ class SearchBar extends HookWidget {
       );
     }
 
-    final filterUnseen = useBlocState<ConversationFilterUnseenCubit, bool>();
+    final filterUnseen = ref.watch(conversationUnseenFilterEnabledProvider);
 
     return MoveWindow(
       child: SizedBox(
@@ -61,7 +71,7 @@ class SearchBar extends HookWidget {
                   actions: {
                     EscapeIntent: CallbackAction<EscapeIntent>(
                       onInvoke: (intent) {
-                        context.read<KeywordCubit>().emit('');
+                        ref.read(keywordProvider.notifier).state = '';
                         context.read<TextEditingController>().text = '';
                         context.read<FocusNode>().unfocus();
                       },
@@ -71,11 +81,13 @@ class SearchBar extends HookWidget {
                       builder: (context) => SearchTextField(
                             focusNode: context.read<FocusNode>(),
                             controller: context.read<TextEditingController>(),
-                            onChanged: (keyword) =>
-                                context.read<KeywordCubit>().emit(keyword),
+                            onChanged: (keyword) => ref
+                                .read(keywordProvider.notifier)
+                                .state = keyword,
                             hintText: filterUnseen
                                 ? context.l10n.searchUnread
-                                : context.l10n.search,
+                                // ignore: avoid-non-ascii-symbols
+                                : '${context.l10n.search} (${Platform.isMacOS || Platform.isIOS ? '⌘' : 'Ctrl '}K)',
                           )),
                 ),
               ),
@@ -83,62 +95,60 @@ class SearchBar extends HookWidget {
             const SizedBox(width: 8),
             ActionButton(
               name: Resources.assetsImagesFilterUnseenSvg,
-              onTap: () =>
-                  context.read<ConversationFilterUnseenCubit>().toggle(),
+              onTap: () => ref
+                  .read(conversationUnseenFilterEnabledProvider.notifier)
+                  .toggle(),
               color: filterUnseen ? context.theme.accent : context.theme.icon,
             ),
             const SizedBox(width: 4),
-            ContextMenuPortalEntry(
-              buildMenus: () => [
-                ContextMenu(
+            CustomPopupMenuButton(
+              itemBuilder: (context) => [
+                CustomPopupMenuItem(
                   icon: Resources.assetsImagesContextMenuSearchUserSvg,
                   title: context.l10n.searchContact,
-                  onTap: () => showMixinDialog<String>(
-                    context: context,
-                    child: const _SearchUserDialog(),
-                  ),
+                  value: _ActionType.searchContact,
                 ),
-                ContextMenu(
+                CustomPopupMenuItem(
                   icon: Resources.assetsImagesContextMenuCreateConversationSvg,
                   title: context.l10n.createConversation,
-                  onTap: () {
+                  value: _ActionType.createConversation,
+                ),
+                CustomPopupMenuItem(
+                  icon: Resources.assetsImagesContextMenuCreateGroupSvg,
+                  title: context.l10n.createGroup,
+                  value: _ActionType.createGroup,
+                ),
+                CustomPopupMenuItem(
+                  icon: Resources.assetsImagesCircleSvg,
+                  title: context.l10n.createCircle,
+                  value: _ActionType.createCircle,
+                ),
+              ],
+              onSelected: (type) {
+                switch (type) {
+                  case _ActionType.searchContact:
+                    showMixinDialog<String>(
+                      context: context,
+                      child: const _SearchUserDialog(),
+                    );
+                  case _ActionType.createConversation:
                     Actions.maybeInvoke(
                       context,
                       const CreateConversationIntent(),
                     );
-                  },
-                ),
-                ContextMenu(
-                  icon: Resources.assetsImagesContextMenuCreateGroupSvg,
-                  title: context.l10n.createGroup,
-                  onTap: () async {
+                  case _ActionType.createGroup:
                     Actions.maybeInvoke(
                       context,
                       const CreateGroupConversationIntent(),
                     );
-                  },
-                ),
-                ContextMenu(
-                  icon: Resources.assetsImagesCircleSvg,
-                  title: context.l10n.createCircle,
-                  onTap: () async {
+                  case _ActionType.createCircle:
                     Actions.maybeInvoke(
                       context,
                       const CreateCircleIntent(),
                     );
-                  },
-                ),
-              ],
-              child: Builder(
-                builder: (context) => MoveWindowBarrier(
-                  child: ActionButton(
-                    name: Resources.assetsImagesIcAddSvg,
-                    onTapUp: (event) =>
-                        context.sendMenuPosition(event.globalPosition),
-                    color: context.theme.icon,
-                  ),
-                ),
-              ),
+                }
+              },
+              icon: Resources.assetsImagesIcAddSvg,
             ),
             const SizedBox(width: 12),
           ],
@@ -152,12 +162,12 @@ class _SearchIntent extends Intent {
   const _SearchIntent();
 }
 
-class _SearchUserDialog extends HookWidget {
+class _SearchUserDialog extends HookConsumerWidget {
   const _SearchUserDialog();
 
   @override
-  Widget build(BuildContext context) {
-    final currentIdentityNumber = context.multiAuthState.currentIdentityNumber;
+  Widget build(BuildContext context, WidgetRef ref) {
+    final currentIdentityNumber = context.account?.identityNumber;
 
     final textEditingController = useTextEditingController();
     final textEditingValueStream =
@@ -211,7 +221,6 @@ class _SearchUserDialog extends HookWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       FocusableActionDetector(
-                        autofocus: true,
                         shortcuts: {
                           if (searchable)
                             const SingleActivator(LogicalKeyboardKey.enter):
@@ -226,7 +235,10 @@ class _SearchUserDialog extends HookWidget {
                           textEditingController: textEditingController,
                           hintText: context.l10n.addPeopleSearchHint,
                           inputFormatters: [
-                            FilteringTextInputFormatter.allow(RegExp('[0-9+]'))
+                            FilteringTextInputFormatter.allow(RegExp('[0-9+]')),
+                            LengthLimitingTextInputFormatter(
+                              kDefaultTextInputLimit,
+                            ),
                           ],
                         ),
                       ),

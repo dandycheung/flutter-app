@@ -1,19 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../constants/resources.dart';
+import '../../db/database_event_bus.dart';
 import '../../db/mixin_database.dart';
-import '../../ui/home/bloc/conversation_cubit.dart';
 import '../../ui/home/chat/chat_page.dart';
+import '../../ui/provider/conversation_provider.dart';
 import '../../utils/extension/extension.dart';
 import '../../utils/hook.dart';
 import '../../utils/logger.dart';
 import '../action_button.dart';
 import '../avatar_view/avatar_view.dart';
 import '../buttons.dart';
-import '../conversation/verified_or_bot_widget.dart';
+import '../conversation/badges_widget.dart';
 import '../dialog.dart';
+import '../high_light_text.dart';
 import '../menu.dart';
 import '../more_extended_text.dart';
 import '../toast.dart';
@@ -74,8 +77,8 @@ Future<void> showUserDialog(BuildContext context, String? userId,
 
 class UserDialog extends StatelessWidget {
   const UserDialog({
-    super.key,
     required this.userId,
+    super.key,
     this.refreshUser = true,
   });
 
@@ -91,8 +94,8 @@ class UserDialog extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Row(
-                  children: const [
+                const Row(
+                  children: [
                     Spacer(),
                     Padding(
                       padding: EdgeInsets.only(right: 12, top: 12),
@@ -108,7 +111,7 @@ class UserDialog extends StatelessWidget {
       );
 }
 
-class _UserProfileLoader extends HookWidget {
+class _UserProfileLoader extends HookConsumerWidget {
   const _UserProfileLoader(
     this.userId, {
     this.refreshUser = true,
@@ -118,12 +121,14 @@ class _UserProfileLoader extends HookWidget {
   final bool refreshUser;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final accountServer = context.accountServer;
     final user = useMemoizedStream(
         () => accountServer.database.userDao
-            .userById(userId)
-            .watchSingleOrNullThrottle(kDefaultThrottleDuration),
+                .userById(userId)
+                .watchSingleOrNullWithStream(eventStreams: [
+              DataBaseEventBus.instance.watchUpdateUserStream([userId])
+            ], duration: kDefaultThrottleDuration),
         keys: [userId]).data;
 
     useEffect(() {
@@ -148,37 +153,55 @@ class _UserProfileBody extends StatelessWidget {
   Widget build(BuildContext context) {
     final anonymous = user.identityNumber == '0';
     final biographyIsNotEmpty = !(user.biography?.isEmpty ?? true);
+
+    final isDeactivated = user.isDeactivated ?? false;
     return AnimatedSize(
       duration: const Duration(milliseconds: 150),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          AvatarWidget(
-            size: 90,
-            avatarUrl: user.avatarUrl,
-            userId: user.userId,
-            name: user.fullName,
+          GestureDetector(
+            onTap: () {
+              final copy = HardwareKeyboard.instance.logicalKeysPressed
+                  .contains(LogicalKeyboardKey.altLeft);
+              if (copy) {
+                Clipboard.setData(
+                    ClipboardData(text: 'mixin://users/${user.userId}'));
+              }
+            },
+            child: AvatarWidget(
+              size: 90,
+              avatarUrl: user.avatarUrl,
+              userId: user.userId,
+              name: user.fullName,
+            ),
           ),
           const SizedBox(height: 8),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Flexible(
-                child: SelectableText(
-                  user.fullName ?? '',
-                  style: TextStyle(
-                    color: context.theme.text,
-                    fontSize: 16,
-                    height: 1,
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 32),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: CustomSelectableArea(
+                    child: CustomText(
+                      user.fullName ?? '',
+                      style: TextStyle(
+                        color: context.theme.text,
+                        fontSize: 16,
+                        height: 1,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
                   ),
-                  textAlign: TextAlign.center,
                 ),
-              ),
-              VerifiedOrBotWidget(
-                verified: user.isVerified,
-                isBot: !anonymous && user.appId != null,
-              )
-            ],
+                BadgesWidget(
+                  verified: user.isVerified,
+                  isBot: !anonymous && user.appId != null,
+                  membership: user.membership,
+                )
+              ],
+            ),
           ),
           Column(
             mainAxisSize: MainAxisSize.min,
@@ -186,7 +209,7 @@ class _UserProfileBody extends StatelessWidget {
               if (!anonymous)
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
-                  child: SelectableText(
+                  child: CustomSelectableText(
                     context.l10n.contactMixinId(user.identityNumber),
                     style: TextStyle(
                       color: context.theme.secondaryText,
@@ -194,15 +217,33 @@ class _UserProfileBody extends StatelessWidget {
                     ),
                   ),
                 ),
-              if (!anonymous && user.isStranger)
+              if (!anonymous && user.isStranger && !isDeactivated)
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
                   child: _AddToContactsButton(user: user),
                 ),
-              if (biographyIsNotEmpty)
+              if (biographyIsNotEmpty && !isDeactivated)
                 Padding(
                   padding: const EdgeInsets.only(top: 20),
                   child: _BioText(biography: user.biography ?? ''),
+                ),
+              if (isDeactivated)
+                Container(
+                  width: double.infinity,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  alignment: Alignment.center,
+                  margin: const EdgeInsets.only(top: 20, right: 20, left: 20),
+                  decoration: BoxDecoration(
+                    color: context.theme.listSelected,
+                    borderRadius: const BorderRadius.all(Radius.circular(8)),
+                  ),
+                  child: Text(
+                    context.l10n.userDeleteHint,
+                    style: TextStyle(
+                      color: context.theme.red,
+                    ),
+                  ),
                 ),
               if (!anonymous)
                 Padding(
@@ -292,23 +333,26 @@ class _UserProfileButtonBar extends StatelessWidget {
             singleSelect: true,
             title: context.l10n.shareContact,
             onlyContact: false,
-            action: ContextMenuPortalEntry(
-              buildMenus: () => [
-                ContextMenu(
+            action: CustomPopupMenuButton(
+              alignment: Alignment.bottomCenter,
+              itemBuilder: (context) => [
+                CustomPopupMenuItem(
                   icon: Resources.assetsImagesContextMenuCopySvg,
                   title: context.l10n.copyLink,
-                  onTap: () async {
-                    i('share contact ${user.userId} ${user.codeUrl}');
-                    await Clipboard.setData(ClipboardData(text: user.codeUrl));
-                  },
+                  value: null,
                 ),
               ],
-              interactiveForTap: true,
-              child: ActionButton(
-                name: Resources.assetsImagesInviteShareSvg,
-                interactive: false,
-                color: context.theme.icon,
-              ),
+              onSelected: (_) async {
+                final codeUrl = user.codeUrl;
+                if (codeUrl == null) {
+                  e('codeUrl is null: $user');
+                  return;
+                }
+                i('share contact ${user.userId} $codeUrl');
+                await Clipboard.setData(ClipboardData(text: codeUrl));
+              },
+              color: context.theme.icon,
+              icon: Resources.assetsImagesInviteShareSvg,
             ),
           );
 
@@ -336,7 +380,7 @@ class _UserProfileButtonBar extends StatelessWidget {
               // skip self.
               return;
             }
-            await ConversationCubit.selectUser(
+            await ConversationStateNotifier.selectUser(
               context,
               user.userId,
             );
@@ -349,7 +393,7 @@ class _UserProfileButtonBar extends StatelessWidget {
           name: Resources.assetsImagesInformationSvg,
           size: 30,
           onTap: () async {
-            await ConversationCubit.selectUser(
+            await ConversationStateNotifier.selectUser(
               context,
               user.userId,
               initialChatSidePage: ChatSideCubit.infoPage,

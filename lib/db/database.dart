@@ -1,3 +1,9 @@
+import 'dart:async';
+
+import '../ui/provider/slide_category_provider.dart';
+import '../utils/extension/extension.dart';
+import '../utils/logger.dart';
+import '../utils/property/setting_property.dart';
 import 'dao/app_dao.dart';
 import 'dao/asset_dao.dart';
 import 'dao/chain_dao.dart';
@@ -8,6 +14,8 @@ import 'dao/expired_message_dao.dart';
 import 'dao/favorite_app_dao.dart';
 import 'dao/fiat_dao.dart';
 import 'dao/flood_message_dao.dart';
+import 'dao/inscription_collection_dao.dart';
+import 'dao/inscription_item_dao.dart';
 import 'dao/job_dao.dart';
 import 'dao/message_dao.dart';
 import 'dao/message_history_dao.dart';
@@ -17,106 +25,221 @@ import 'dao/participant_dao.dart';
 import 'dao/participant_session_dao.dart';
 import 'dao/pin_message_dao.dart';
 import 'dao/resend_session_message_dao.dart';
+import 'dao/safe_snapshot_dao.dart';
 import 'dao/snapshot_dao.dart';
 import 'dao/sticker_album_dao.dart';
 import 'dao/sticker_dao.dart';
 import 'dao/sticker_relationship_dao.dart';
+import 'dao/token_dao.dart';
 import 'dao/transcript_message_dao.dart';
 import 'dao/user_dao.dart';
+import 'fts_database.dart';
 import 'mixin_database.dart';
 
 class Database {
-  Database(this.mixinDatabase) {
-    appDao = AppDao(mixinDatabase);
-    assetDao = AssetDao(mixinDatabase);
-    chainDao = ChainDao(mixinDatabase);
-    conversationDao = ConversationDao(mixinDatabase);
-    circleDao = CircleDao(mixinDatabase);
-    circleConversationDao = CircleConversationDao(mixinDatabase);
-    floodMessageDao = FloodMessageDao(mixinDatabase);
-    messageDao = MessageDao(mixinDatabase);
-    messagesHistoryDao = MessageHistoryDao(mixinDatabase);
-    messageMentionDao = MessageMentionDao(mixinDatabase);
-    jobDao = JobDao(mixinDatabase);
-    offsetDao = OffsetDao(mixinDatabase);
-    participantDao = ParticipantDao(mixinDatabase);
-    resendSessionMessageDao = ResendSessionMessageDao(mixinDatabase);
-    snapshotDao = SnapshotDao(mixinDatabase);
-    stickerDao = StickerDao(mixinDatabase);
-    stickerAlbumDao = StickerAlbumDao(mixinDatabase);
-    stickerRelationshipDao = StickerRelationshipDao(mixinDatabase);
-    participantSessionDao = ParticipantSessionDao(mixinDatabase);
-    userDao = UserDao(mixinDatabase);
-    transcriptMessageDao = TranscriptMessageDao(mixinDatabase);
-    pinMessageDao = PinMessageDao(mixinDatabase);
-    fiatDao = FiatDao(mixinDatabase);
-    favoriteAppDao = FavoriteAppDao(mixinDatabase);
-    expiredMessageDao = ExpiredMessageDao(mixinDatabase);
+  Database(this.mixinDatabase, this.ftsDatabase) {
+    settingProperties = SettingPropertyStorage(mixinDatabase.propertyDao);
   }
-
-  // static MixinDatabase _database;
-  // static Future init() async {
-  //   _database = await getMixinDatabaseConnection('3910');
-  // }
 
   final MixinDatabase mixinDatabase;
 
-  late final AppDao appDao;
+  final FtsDatabase ftsDatabase;
 
-  late final AssetDao assetDao;
+  AppDao get appDao => mixinDatabase.appDao;
 
-  late final ChainDao chainDao;
+  AssetDao get assetDao => mixinDatabase.assetDao;
 
-  late final MessageDao messageDao;
+  ChainDao get chainDao => mixinDatabase.chainDao;
 
-  late final MessageHistoryDao messagesHistoryDao;
+  TokenDao get tokenDao => mixinDatabase.tokenDao;
 
-  late final MessageMentionDao messageMentionDao;
+  MessageDao get messageDao => mixinDatabase.messageDao;
 
-  late final ConversationDao conversationDao;
+  MessageHistoryDao get messageHistoryDao => mixinDatabase.messageHistoryDao;
 
-  late final CircleDao circleDao;
+  MessageMentionDao get messageMentionDao => mixinDatabase.messageMentionDao;
 
-  late final CircleConversationDao circleConversationDao;
+  ConversationDao get conversationDao => mixinDatabase.conversationDao;
 
-  late final FloodMessageDao floodMessageDao;
+  CircleDao get circleDao => mixinDatabase.circleDao;
 
-  late final JobDao jobDao;
+  CircleConversationDao get circleConversationDao =>
+      mixinDatabase.circleConversationDao;
 
-  late final OffsetDao offsetDao;
+  FloodMessageDao get floodMessageDao => mixinDatabase.floodMessageDao;
 
-  late final ParticipantDao participantDao;
+  JobDao get jobDao => mixinDatabase.jobDao;
 
-  late final ParticipantSessionDao participantSessionDao;
+  OffsetDao get offsetDao => mixinDatabase.offsetDao;
 
-  late final ResendSessionMessageDao resendSessionMessageDao;
+  ParticipantDao get participantDao => mixinDatabase.participantDao;
 
-  late final SnapshotDao snapshotDao;
+  ParticipantSessionDao get participantSessionDao =>
+      mixinDatabase.participantSessionDao;
 
-  late final StickerDao stickerDao;
+  ResendSessionMessageDao get resendSessionMessageDao =>
+      mixinDatabase.resendSessionMessageDao;
 
-  late final StickerAlbumDao stickerAlbumDao;
+  SnapshotDao get snapshotDao => mixinDatabase.snapshotDao;
 
-  late final StickerRelationshipDao stickerRelationshipDao;
+  SafeSnapshotDao get safeSnapshotDao => mixinDatabase.safeSnapshotDao;
 
-  late final UserDao userDao;
+  StickerDao get stickerDao => mixinDatabase.stickerDao;
 
-  late final TranscriptMessageDao transcriptMessageDao;
+  StickerAlbumDao get stickerAlbumDao => mixinDatabase.stickerAlbumDao;
 
-  late final PinMessageDao pinMessageDao;
+  StickerRelationshipDao get stickerRelationshipDao =>
+      mixinDatabase.stickerRelationshipDao;
 
-  late final FiatDao fiatDao;
+  UserDao get userDao => mixinDatabase.userDao;
 
-  late final FavoriteAppDao favoriteAppDao;
+  TranscriptMessageDao get transcriptMessageDao =>
+      mixinDatabase.transcriptMessageDao;
 
-  late final ExpiredMessageDao expiredMessageDao;
+  PinMessageDao get pinMessageDao => mixinDatabase.pinMessageDao;
+
+  FiatDao get fiatDao => mixinDatabase.fiatDao;
+
+  FavoriteAppDao get favoriteAppDao => mixinDatabase.favoriteAppDao;
+
+  ExpiredMessageDao get expiredMessageDao => mixinDatabase.expiredMessageDao;
+
+  InscriptionCollectionDao get inscriptionCollectionDao =>
+      mixinDatabase.inscriptionCollectionDao;
+
+  InscriptionItemDao get inscriptionItemDao => mixinDatabase.inscriptionItemDao;
+
+  late final SettingPropertyStorage settingProperties;
 
   Future<void> dispose() async {
-    await mixinDatabase.eventBus.dispose();
     await mixinDatabase.close();
+    await ftsDatabase.close();
     // dispose stream, https://github.com/simolus3/moor/issues/290
   }
 
   Future<T> transaction<T>(Future<T> Function() action) =>
       mixinDatabase.transaction<T>(action);
+
+  /// [conversationIds] empty to search all conversations.
+  Future<List<SearchMessageDetailItem>> fuzzySearchMessage({
+    required String query,
+    required int limit,
+    List<String> conversationIds = const [],
+    String? userId,
+    List<String>? categories,
+    String? anchorMessageId,
+  }) async {
+    final messageIds = await ftsDatabase.fuzzySearchMessage(
+      query: query,
+      limit: limit,
+      conversationIds: conversationIds,
+      userId: userId,
+      categories: categories,
+      anchorMessageId: anchorMessageId,
+    );
+    final messages =
+        await mixinDatabase.messageDao.searchMessageByIds(messageIds).get();
+
+    final result = <SearchMessageDetailItem>[];
+
+    for (final messageId in messageIds) {
+      final message =
+          messages.firstWhereOrNull((m) => m.messageId == messageId);
+      if (message != null) {
+        result.add(message);
+      } else {
+        e('fuzzySearchMessage message not found $messageId');
+        unawaited(ftsDatabase.deleteByMessageId(messageId));
+      }
+    }
+    return messages;
+  }
+
+  Future<List<SearchMessageDetailItem>> fuzzySearchMessageByCategory(
+    String keyword, {
+    required int limit,
+    required SlideCategoryState category,
+    bool unseenConversationOnly = false,
+    String? anchorMessageId,
+  }) async {
+    Future<List<String>> getConversationIds() async {
+      final List<String> conversations;
+      if (unseenConversationOnly) {
+        conversations = await conversationDao
+            .unseenConversationByCategory(category.type)
+            .map((item) => item.conversationId)
+            .get();
+      } else {
+        conversations = await conversationDao
+            .conversationItemsByCategory(category.type, 1000, 0)
+            .get()
+            .then((value) => value.map((e) => e.conversationId).toList());
+      }
+      return conversations;
+    }
+
+    switch (category.type) {
+      case SlideCategoryType.chats:
+        if (!unseenConversationOnly) {
+          return fuzzySearchMessage(
+            query: keyword,
+            limit: limit,
+            anchorMessageId: anchorMessageId,
+          );
+        }
+        final conversationIds = await getConversationIds();
+        if (conversationIds.isEmpty) {
+          i('fuzzySearchMessageByCategory $category $unseenConversationOnly no conversationIds');
+          return Future.value(const []);
+        }
+        return fuzzySearchMessage(
+          query: keyword,
+          limit: limit,
+          anchorMessageId: anchorMessageId,
+          conversationIds: conversationIds,
+        );
+      case SlideCategoryType.groups:
+      case SlideCategoryType.bots:
+      case SlideCategoryType.strangers:
+      case SlideCategoryType.contacts:
+        final conversationIds = await getConversationIds();
+        if (conversationIds.isEmpty) {
+          i('fuzzySearchMessageByCategory $category $unseenConversationOnly no conversationIds');
+          return Future.value(const []);
+        }
+        return fuzzySearchMessage(
+          query: keyword,
+          limit: limit,
+          anchorMessageId: anchorMessageId,
+          conversationIds: await getConversationIds(),
+        );
+      case SlideCategoryType.circle:
+        final circleId = category.id!;
+        final List<String> conversationIds;
+        if (unseenConversationOnly) {
+          conversationIds = await conversationDao
+              .unseenConversationsByCircleId(circleId)
+              .map((item) => item.conversationId)
+              .get();
+        } else {
+          conversationIds = await conversationDao
+              .conversationsByCircleId(circleId, 1000, 0)
+              .map((item) => item.conversationId)
+              .get();
+        }
+        if (conversationIds.isEmpty) {
+          i('fuzzySearchMessageByCategory $category $unseenConversationOnly no conversationIds');
+          return Future.value(const []);
+        }
+        return fuzzySearchMessage(
+          query: keyword,
+          limit: limit,
+          anchorMessageId: anchorMessageId,
+          conversationIds: conversationIds,
+        );
+      case SlideCategoryType.setting:
+        assert(false, 'should not search setting');
+        return Future.value(const []);
+    }
+  }
 }

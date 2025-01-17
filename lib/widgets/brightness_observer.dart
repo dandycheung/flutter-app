@@ -2,19 +2,19 @@ import 'dart:ui';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
-
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import '../utils/app_lifecycle.dart';
 import '../utils/system/system_utils.dart';
 
-class BrightnessObserver extends HookWidget {
+class BrightnessObserver extends HookConsumerWidget {
   const BrightnessObserver({
+    required this.child,
+    required this.lightThemeData,
+    required this.darkThemeData,
     super.key,
     this.duration = const Duration(milliseconds: 200),
     this.curve = Curves.linear,
     this.onEnd,
-    required this.child,
-    required this.lightThemeData,
-    required this.darkThemeData,
     this.forceBrightness,
   });
 
@@ -30,7 +30,7 @@ class BrightnessObserver extends HookWidget {
       forceBrightness ?? MediaQuery.platformBrightnessOf(context);
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final currentBrightness = _getBrightness(context);
     final brightnessRef = useRef(currentBrightness);
 
@@ -93,8 +93,8 @@ class BrightnessData extends InheritedWidget {
   const BrightnessData({
     required this.value,
     required super.child,
-    super.key,
     required this.brightnessThemeData,
+    super.key,
   });
 
   final double value;
@@ -146,6 +146,7 @@ class BrightnessThemeData {
     required this.stickerPlaceholderColor,
     required this.waveformBackground,
     required this.waveformForeground,
+    required this.settingCellBackgroundColor,
   });
 
   final Color primary;
@@ -169,6 +170,7 @@ class BrightnessThemeData {
   final Color stickerPlaceholderColor;
   final Color waveformBackground;
   final Color waveformForeground;
+  final Color settingCellBackgroundColor;
 
   static BrightnessThemeData lerp(
           BrightnessThemeData begin, BrightnessThemeData end, double t) =>
@@ -200,6 +202,8 @@ class BrightnessThemeData {
             Color.lerp(begin.waveformBackground, end.waveformBackground, t)!,
         waveformForeground:
             Color.lerp(begin.waveformForeground, end.waveformForeground, t)!,
+        settingCellBackgroundColor: Color.lerp(begin.settingCellBackgroundColor,
+            end.settingCellBackgroundColor, t)!,
       );
 
   @override
@@ -226,7 +230,8 @@ class BrightnessThemeData {
           statusBackground == other.statusBackground &&
           stickerPlaceholderColor == other.stickerPlaceholderColor &&
           waveformBackground == other.waveformBackground &&
-          waveformForeground == other.waveformForeground;
+          waveformForeground == other.waveformForeground &&
+          settingCellBackgroundColor == other.settingCellBackgroundColor;
 
   @override
   int get hashCode =>
@@ -249,5 +254,6 @@ class BrightnessThemeData {
       statusBackground.hashCode ^
       stickerPlaceholderColor.hashCode ^
       waveformBackground.hashCode ^
+      waveformForeground.hashCode ^
       waveformForeground.hashCode;
 }

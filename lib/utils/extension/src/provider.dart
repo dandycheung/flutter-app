@@ -1,31 +1,46 @@
 part of '../extension.dart';
 
 extension ProviderExtension on BuildContext {
-  MultiAuthCubit get multiAuthCubit => read<MultiAuthCubit>();
+  MultiAuthStateNotifier get multiAuthChangeNotifier =>
+      providerContainer.read(multiAuthStateNotifierProvider.notifier);
 
-  MultiAuthState get multiAuthState => multiAuthCubit.state;
+  AuthState? get auth => providerContainer.read(authProvider);
 
-  SettingCubit get settingCubit => read<SettingCubit>();
+  Account? get account => providerContainer.read(authAccountProvider);
 
-  AccountServer get accountServer => read<AccountServer>();
+  SettingChangeNotifier get settingChangeNotifier =>
+      providerContainer.read(settingProvider);
+
+  AccountServer get accountServer =>
+      providerContainer.read(accountServerProvider.select((value) {
+        if (!value.hasValue) throw Exception('AccountServerProvider not ready');
+        return value.requireValue;
+      }));
 
   AudioMessagePlayService get audioMessageService =>
       read<AudioMessagePlayService>();
 
-  Database get database => accountServer.database;
+  Database get database =>
+      providerContainer.read(databaseProvider.select((value) {
+        if (!value.hasValue) throw Exception('DatabaseProvider not ready');
+        return value.requireValue;
+      }));
 
-  Localization get l10n => Localization.of(this);
+  Localization get l10n => Localization.maybeOf(this) ?? Localization.current;
 
   BrightnessThemeData get theme => BrightnessData.themeOf(this);
 
   double get brightnessValue => BrightnessData.of(this);
 
   Brightness get brightness =>
-      watch<SettingCubit>().brightness ?? MediaQuery.platformBrightnessOf(this);
+      settingChangeNotifier.brightness ?? MediaQuery.platformBrightnessOf(this);
 
   Color dynamicColor(
     Color color, {
     Color? darkColor,
   }) =>
       BrightnessData.dynamicColor(this, color, darkColor: darkColor);
+
+  ProviderContainer get providerContainer =>
+      ProviderScope.containerOf(this, listen: false);
 }

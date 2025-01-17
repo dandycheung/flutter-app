@@ -1,17 +1,18 @@
 import 'package:flutter/widgets.dart';
-import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../../enum/message_action.dart';
 import '../../../generated/l10n.dart';
 import '../../../utils/extension/extension.dart';
+import '../../high_light_text.dart';
 import '../message.dart';
 import '../message_style.dart';
 
-class SystemMessage extends HookWidget {
+class SystemMessage extends HookConsumerWidget {
   const SystemMessage({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final actionName =
         useMessageConverter(converter: (state) => state.actionName);
     final participantUserId =
@@ -43,7 +44,7 @@ class SystemMessage extends HookWidget {
                 vertical: 5,
                 horizontal: 10,
               ),
-              child: Text(
+              child: CustomText(
                 generateSystemText(
                   actionName: actionName,
                   participantUserId: participantUserId,
@@ -88,14 +89,12 @@ String generateSystemText({
             ? Localization.current.you
             : participantFullName ?? '',
       );
-      break;
     case MessageAction.exit:
       text = Localization.current.chatGroupExit(
         participantIsCurrentUser
             ? Localization.current.you
             : participantFullName ?? '',
       );
-      break;
     case MessageAction.add:
       text = Localization.current.chatGroupAdd(
         senderIsCurrentUser ? Localization.current.you : senderFullName!,
@@ -103,7 +102,6 @@ String generateSystemText({
             ? Localization.current.you
             : participantFullName ?? '',
       );
-      break;
     case MessageAction.remove:
       text = Localization.current.chatGroupRemove(
         senderIsCurrentUser ? Localization.current.you : senderFullName!,
@@ -111,19 +109,16 @@ String generateSystemText({
             ? Localization.current.you
             : participantFullName ?? '',
       );
-      break;
     case MessageAction.create:
       text = Localization.current.createdThisGroup(
         senderIsCurrentUser ? Localization.current.you : senderFullName!,
       );
-      break;
     case MessageAction.role:
       text = Localization.current.nowAnAddmin(
         participantIsCurrentUser
             ? Localization.current.you
             : participantFullName!,
       );
-      break;
     case MessageAction.expire:
       final senderName =
           senderIsCurrentUser ? Localization.current.you : senderFullName!;
@@ -138,11 +133,9 @@ String generateSystemText({
           Duration(seconds: expireIn).formatAsConversationExpireIn(),
         );
       }
-      break;
     case MessageAction.update:
     default:
       text = Localization.current.messageNotSupport;
-      break;
   }
   return text;
 }

@@ -1,29 +1,34 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:mixin_bot_sdk_dart/mixin_bot_sdk_dart.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../../crypto/uuid/uuid.dart';
 import '../../../db/dao/sticker_dao.dart';
 import '../../../db/mixin_database.dart';
 import '../../../enum/encrypt_category.dart';
-import '../../../ui/home/bloc/conversation_cubit.dart';
+import '../../../ui/provider/conversation_provider.dart';
 import '../../../utils/extension/extension.dart';
 import '../../../utils/hook.dart';
 import '../../../utils/load_balancer_utils.dart';
 import '../../../utils/logger.dart';
 import '../../app_bar.dart';
 import '../../buttons.dart';
-import '../../cache_image.dart';
 import '../../dialog.dart';
+import '../../mixin_image.dart';
 import '../../sticker_page/sticker_item.dart';
 import '../../toast.dart';
 import '../../user_selector/conversation_selector.dart';
 import '../item/action_card/action_card_data.dart';
 import '../item/action_card/action_message.dart';
+import '../item/action_card/actions_card.dart';
 import '../item/contact_message_widget.dart';
 import '../item/post_message.dart';
 import '../message.dart';
 import '../message_bubble.dart';
+import '../message_style.dart';
 import 'send_image_data.dart';
 
 enum _Category {
@@ -46,19 +51,14 @@ Future<bool> showSendDialog(
   String? conversationId,
   String? data,
   App? app,
+  String? user,
 ) async {
   final _category = category?.category;
   if (_category == null || data == null || data.isEmpty) return false;
 
-  final _conversationId =
-      context.read<ConversationCubit>().state?.conversationId == conversationId
-          ? conversationId
-          : null;
-
   dynamic result;
   try {
-    final _data =
-        await utf8DecodeWithIsolate(await base64DecodeWithIsolate(data));
+    final _data = await utf8DecodeWithIsolate(decodeBase64(data));
 
     switch (_category) {
       case _Category.image:
@@ -67,7 +67,6 @@ Future<bool> showSendDialog(
               await jsonDecodeWithIsolate(_data) as Map<String, dynamic>;
           result = SendImageData.fromJson(json);
         }
-        break;
       case _Category.contact:
         {
           final json =
@@ -77,7 +76,6 @@ Future<bool> showSendDialog(
           }
           result = json['user_id'];
         }
-        break;
       case _Category.sticker:
         {
           if (!Uuid.isValidUUID(fromString: _data)) {
@@ -86,33 +84,72 @@ Future<bool> showSendDialog(
           }
           result = _data;
         }
-        break;
       case _Category.app_card:
         {
           final json =
               await jsonDecodeWithIsolate(_data) as Map<String, dynamic>;
           result = AppCardData.fromJson(json);
         }
-        break;
       // ignore: no_default_cases
       default:
         result = _data;
-        break;
     }
   } catch (e, s) {
     w('showSendDialog error: $e, $s');
     return false;
   }
 
+  if (user != null) {
+    return _sendMessageToUserId(context, user, _category, result);
+  }
+  if (conversationId == null) {
+    final currentConversation =
+        context.providerContainer.read(conversationProvider);
+    if (currentConversation != null) {
+      await _sendMessage(context, currentConversation.conversationId,
+          currentConversation.encryptCategory, _category, result);
+      return true;
+    }
+  }
+
   await showMixinDialog(
     context: context,
-    child: _SendPage(_category, _conversationId, result, app),
+    child: _SendPage(_category, conversationId, result, app),
   );
 
   return true;
 }
 
-class _SendPage extends HookWidget {
+Future<bool> _sendMessageToUserId(BuildContext context, String userId,
+    _Category category, dynamic data) async {
+  if (!Uuid.isValidUUID(fromString: userId)) {
+    return false;
+  }
+
+  showToastLoading();
+  try {
+    final users = await context.accountServer.refreshUsers([userId]);
+    if (users == null || users.isEmpty) {
+      return false;
+    }
+  } finally {
+    Toast.dismiss();
+  }
+
+  final conversationId =
+      generateConversationId(context.accountServer.userId, userId);
+  await ConversationStateNotifier.selectUser(context, userId);
+  final conversation = context.providerContainer.read(conversationProvider);
+  if (conversation == null) {
+    return false;
+  }
+  await _sendMessage(
+      context, conversationId, conversation.encryptCategory, category, data,
+      recipientId: userId);
+  return true;
+}
+
+class _SendPage extends HookConsumerWidget {
   const _SendPage(this.category, this.conversationId, this.data, this.app);
 
   final _Category category;
@@ -121,28 +158,22 @@ class _SendPage extends HookWidget {
   final App? app;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final title = useMemoized(() {
       String _category;
       switch (category) {
         case _Category.text:
           _category = context.l10n.text;
-          break;
         case _Category.image:
           _category = context.l10n.image;
-          break;
         case _Category.sticker:
           _category = context.l10n.sticker;
-          break;
         case _Category.contact:
           _category = context.l10n.contact;
-          break;
         case _Category.post:
           _category = context.l10n.post;
-          break;
         case _Category.app_card:
           _category = context.l10n.card;
-          break;
       }
       if (app != null) {
         return context.l10n.shareMessageDescription(
@@ -216,7 +247,9 @@ class _SendPage extends HookWidget {
               borderRadius: const BorderRadius.all(Radius.circular(8)),
             ),
             alignment: Alignment.center,
-            padding: const EdgeInsets.all(34),
+            padding: category == _Category.app_card
+                ? null
+                : const EdgeInsets.all(34),
             child: child,
           ),
           const SizedBox(height: 54),
@@ -236,31 +269,47 @@ class _SendPage extends HookWidget {
 }
 
 Future<void> _sendMessage(BuildContext context, String conversationId,
-    EncryptCategory encryptCategory, _Category category, dynamic data) async {
+    EncryptCategory encryptCategory, _Category category, dynamic data,
+    {String? recipientId}) async {
   if (category == _Category.text) {
     return context.accountServer.sendTextMessage(
-        data as String, encryptCategory,
-        conversationId: conversationId);
+      data as String,
+      encryptCategory,
+      conversationId: conversationId,
+      recipientId: recipientId,
+    );
   }
   if (category == _Category.post) {
     return context.accountServer.sendPostMessage(
-        data as String, encryptCategory,
-        conversationId: conversationId);
+      data as String,
+      encryptCategory,
+      conversationId: conversationId,
+      recipientId: recipientId,
+    );
   }
   if (category == _Category.sticker) {
     return context.accountServer.sendStickerMessage(
-        data as String, null, encryptCategory,
-        conversationId: conversationId);
+      data as String,
+      null,
+      encryptCategory,
+      conversationId: conversationId,
+      recipientId: recipientId,
+    );
   }
   if (category == _Category.contact) {
     return context.accountServer.sendContactMessage(
-        data as String, null, encryptCategory,
-        conversationId: conversationId);
+      data as String,
+      null,
+      encryptCategory,
+      conversationId: conversationId,
+      recipientId: recipientId,
+    );
   }
   if (category == _Category.app_card) {
     return context.accountServer.sendAppCardMessage(
       data: data as AppCardData,
       conversationId: conversationId,
+      recipientId: recipientId,
     );
   }
   if (category == _Category.image) {
@@ -272,6 +321,7 @@ Future<void> _sendMessage(BuildContext context, String conversationId,
         sendImageData.url,
         conversationId: conversationId,
         defaultGifMimeType: false,
+        recipientId: recipientId,
       ),
     );
   }
@@ -286,25 +336,35 @@ final _bubbleClipper = BubbleClipper(
 class _MessageBubble extends StatelessWidget {
   const _MessageBubble({
     required this.child,
-    // ignore: unused_element
     this.padding = const EdgeInsets.all(8),
+    this.clip = false,
   });
 
   final Widget child;
   final EdgeInsetsGeometry padding;
+  final bool clip;
 
   @override
-  Widget build(BuildContext context) => CustomPaint(
-        painter: BubblePainter(
-          color: context.dynamicColor(lightOtherBubble,
-              darkColor: darkOtherBubble),
-          clipper: _bubbleClipper,
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(8),
-          child: child,
-        ),
+  Widget build(BuildContext context) {
+    Widget child = Padding(
+      padding: padding,
+      child: this.child,
+    );
+    if (clip) {
+      child = ClipPath(
+        clipper: _bubbleClipper,
+        child: RepaintBoundary(child: child),
       );
+    }
+    return CustomPaint(
+      painter: BubblePainter(
+        color:
+            context.dynamicColor(lightOtherBubble, darkColor: darkOtherBubble),
+        clipper: _bubbleClipper,
+      ),
+      child: child,
+    );
+  }
 }
 
 class _Text extends StatelessWidget {
@@ -324,30 +384,25 @@ class _Text extends StatelessWidget {
       );
 }
 
-class _Image extends HookWidget {
+class _Image extends HookConsumerWidget {
   const _Image(this.image);
 
   final SendImageData image;
 
   @override
-  Widget build(BuildContext context) {
-    final playing = useImagePlaying(context);
-
-    return CacheImage(
-      image.url,
-      controller: playing,
-      placeholder: () => ColoredBox(color: context.theme.secondaryText),
-    );
-  }
+  Widget build(BuildContext context, WidgetRef ref) => MixinImage.network(
+        image.url,
+        placeholder: () => ColoredBox(color: context.theme.secondaryText),
+      );
 }
 
-class _Sticker extends HookWidget {
+class _Sticker extends HookConsumerWidget {
   const _Sticker(this.stickerId);
 
   final String stickerId;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final sticker = useMemoizedFuture(() async {
       final sticker = await context.database.stickerDao
           .sticker(stickerId)
@@ -374,13 +429,13 @@ class _Sticker extends HookWidget {
   }
 }
 
-class _Contact extends HookWidget {
+class _Contact extends HookConsumerWidget {
   const _Contact(this.userId);
 
   final String userId;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final user = useMemoizedFuture(() async {
       final list = await context.accountServer.refreshUsers([userId]);
       return (list != null && list.isNotEmpty) ? list.first : null;
@@ -396,6 +451,7 @@ class _Contact extends HookWidget {
         isVerified: user.isVerified,
         appId: user.appId,
         identityNumber: user.identityNumber,
+        membership: user.membership,
       ),
     );
   }
@@ -426,7 +482,32 @@ class _AppCard extends StatelessWidget {
   final AppCardData data;
 
   @override
-  Widget build(BuildContext context) => _MessageBubble(
-        child: AppCardItem(data: data),
+  Widget build(BuildContext context) {
+    if (!data.isActionsCard) {
+      return _MessageBubble(
+        child: Padding(
+          padding: const EdgeInsets.all(34),
+          child: AppCardItem(data: data),
+        ),
       );
+    } else {
+      return SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+        child: _MessageBubble(
+          padding: EdgeInsets.zero,
+          clip: true,
+          child: ActionsCardBody(
+            data: data,
+            description: Text(
+              data.description,
+              style: TextStyle(
+                color: context.theme.text,
+                fontSize: context.messageStyle.primaryFontSize,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+  }
 }

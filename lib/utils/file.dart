@@ -25,8 +25,7 @@ Future<List<XFile>> selectFiles() async {
     if (result == null) {
       return const [];
     }
-    return result.paths
-        .whereNotNull()
+    return result.paths.nonNulls
         .map((e) => XFile(e, mimeType: lookupMimeType(e)))
         .toList();
   }
@@ -39,30 +38,33 @@ Future<bool> saveFileToSystem(
   String file, {
   String? suggestName,
 }) async {
-  final targetName = suggestName ?? p.basename(file);
+  final targetName = (suggestName ?? file).pathBasename;
+
+  d('saveFileToSystem: $file, $targetName');
+
   final mineType = lookupMimeType(file);
   final extension = p.extension(targetName);
 
-  d('saveFileToSystem: $file, $targetName, $mineType, $extension');
-
-  var path = await file_selector.getSavePath(
+  var path = (await file_selector.getSaveLocation(
     confirmButtonText: context.l10n.save,
     suggestedName: targetName,
     acceptedTypeGroups: [
-      file_selector.XTypeGroup(
-        label: mineType,
-        extensions: [extension],
-        mimeTypes: [if (mineType != null) mineType],
-      ),
+      if (Platform.isWindows)
+        file_selector.XTypeGroup(
+          label: mineType,
+          extensions: [extension],
+          mimeTypes: [if (mineType != null) mineType],
+        ),
     ],
-  );
+  ))
+      ?.path;
   if (path == null || path.isEmpty) {
     return false;
   }
-
-  if (p.extension(path) != extension) {
+  if (Platform.isWindows && !path.endsWith(extension)) {
     path = path + extension;
   }
+  d('copy file to $path');
   await File(file).copy(path);
   return true;
 }
@@ -113,7 +115,10 @@ Future<void> initMixinDocumentsDirectory() async {
 enum TempFileType {
   pasteboardImage('mixin_paste_board_image', '.png'),
   editImage('image_edit', '.png'),
-  voiceRecord('voice_record', '.ogg');
+  voiceRecord('voice_record', '.ogg'),
+  logZip('log', '.zip'),
+  // video thumbnail
+  thumbnail('thumbnail', '.png');
 
   const TempFileType(this.prefix, this.suffix);
 
@@ -144,4 +149,11 @@ Future<File?> saveBytesToTempFile(
     e('failed to save bytes to temp file. $error $stack');
     return null;
   }
+}
+
+void renameFileWithTime(String path, DateTime time) {
+  final file = File(path);
+  if (!file.existsSync()) return;
+  final newName = '${file.path}.${time.toIso8601String()}';
+  file.renameSync(newName);
 }

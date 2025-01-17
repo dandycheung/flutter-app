@@ -3,26 +3,27 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 
-import '../../../../ui/home/bloc/conversation_cubit.dart';
+import '../../../../ui/provider/conversation_provider.dart';
 import '../../../../utils/extension/extension.dart';
-import '../../../../utils/hook.dart';
 import '../../../../utils/logger.dart';
 import '../../../../utils/uri_utils.dart';
-import '../../../cache_image.dart';
 import '../../../interactive_decorated_box.dart';
+import '../../../mixin_image.dart';
 import '../../message.dart';
 import '../../message_bubble.dart';
 import '../../message_datetime_and_status.dart';
 import '../../message_style.dart';
 import '../unknown_message.dart';
 import 'action_card_data.dart';
+import 'actions_card.dart';
 
-class ActionCardMessage extends HookWidget {
+class ActionCardMessage extends HookConsumerWidget {
   const ActionCardMessage({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final content = useMessageConverter(converter: (state) => state.content);
     final appCardData = useMemoized(
       () {
@@ -39,6 +40,10 @@ class ActionCardMessage extends HookWidget {
 
     if (appCardData == null) return const UnknownMessage();
 
+    if (appCardData.isActionsCard) {
+      return ActionsCardMessage(data: appCardData);
+    }
+
     return MessageBubble(
       outerTimeAndStatusWidget: const MessageDatetimeAndStatus(),
       child: InteractiveDecoratedBox(
@@ -49,8 +54,7 @@ class ActionCardMessage extends HookWidget {
             appCardData.action,
             title: appCardData.title,
             appCardData: appCardData,
-            conversationId:
-                context.read<ConversationCubit>().state?.conversationId,
+            conversationId: ref.read(currentConversationIdProvider),
           );
         },
         child: AppCardItem(data: appCardData),
@@ -59,25 +63,26 @@ class ActionCardMessage extends HookWidget {
   }
 }
 
-class AppCardItem extends HookWidget {
-  const AppCardItem({super.key, required this.data});
+class AppCardItem extends HookConsumerWidget {
+  const AppCardItem({required this.data, super.key});
 
   final AppCardData data;
 
   @override
-  Widget build(BuildContext context) {
-    final playing = useImagePlaying(context);
-
+  Widget build(BuildContext context, WidgetRef ref) {
+    final description = useMemoized(
+      () => const LineSplitter().convert(data.description).firstOrNull ?? '',
+      [data.description],
+    );
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         ClipRRect(
           borderRadius: const BorderRadius.all(Radius.circular(4)),
-          child: CacheImage(
+          child: MixinImage.network(
             data.iconUrl,
             height: 40,
             width: 40,
-            controller: playing,
           ),
         ),
         const SizedBox(width: 8),
@@ -96,7 +101,7 @@ class AppCardItem extends HookWidget {
                 overflow: TextOverflow.ellipsis,
               ),
               Text(
-                data.description,
+                description,
                 maxLines: 1,
                 style: TextStyle(
                   color: context.theme.secondaryText,

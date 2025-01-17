@@ -1,9 +1,12 @@
 import 'package:drift/drift.dart';
 import 'package:mixin_bot_sdk_dart/mixin_bot_sdk_dart.dart' as sdk;
 
-import '../../ui/home/bloc/slide_category_cubit.dart';
+import '../../ui/provider/slide_category_provider.dart';
 import '../../utils/extension/extension.dart';
+import '../database_event_bus.dart';
+import '../extension/db.dart';
 import '../mixin_database.dart';
+import '../util/util.dart';
 
 part 'user_dao.g.dart';
 
@@ -24,28 +27,54 @@ extension UserExtension on sdk.User {
         isScam: isScam ? 1 : 0,
         codeId: codeId,
         codeUrl: codeUrl,
+        isDeactivated: isDeactivated,
+        membership: membership,
       );
 }
 
-@DriftAccessor(tables: [User])
+@DriftAccessor(include: {'../moor/dao/user.drift'})
 class UserDao extends DatabaseAccessor<MixinDatabase> with _$UserDaoMixin {
   UserDao(super.db);
 
-  Future<int> insert(User user) => into(db.users).insertOnConflictUpdate(user);
+  Future<int> insert(User user, {bool updateIfConflict = true}) =>
+      into(db.users)
+          .simpleInsert(user, updateIfConflict: updateIfConflict)
+          .then((value) {
+        if (value > 0) {
+          DataBaseEventBus.instance.updateUsers([user.userId]);
+        }
+        return value;
+      });
 
   Future<int> insertSdkUser(sdk.User user) =>
-      into(db.users).insertOnConflictUpdate(user.asDbUser);
+      into(db.users).insertOnConflictUpdate(user.asDbUser).then((value) {
+        if (value > 0) {
+          DataBaseEventBus.instance.updateUsers([user.userId]);
+        }
+        return value;
+      });
 
   Future<void> insertAll(List<User> users) async => batch((batch) {
         batch.insertAllOnConflictUpdate(db.users, users);
+      }).then((value) {
+        DataBaseEventBus.instance.updateUsers(users.map((e) => e.userId));
+        return value;
       });
 
   Future<void> insertAllSdkUser(List<sdk.User> users) async => batch((batch) {
         batch.insertAllOnConflictUpdate(
             db.users, users.map((e) => e.asDbUser).toList());
+      }).then((value) {
+        DataBaseEventBus.instance.updateUsers(users.map((e) => e.userId));
+        return value;
       });
 
-  Future deleteUser(User user) => delete(db.users).delete(user);
+  Future deleteUser(User user) => delete(db.users).delete(user).then((value) {
+        if (value > 0) {
+          DataBaseEventBus.instance.updateUsers([user.userId]);
+        }
+        return value;
+      });
 
   SimpleSelectStatement<Users, User> userById(String userId) => select(db.users)
     ..where((tbl) => tbl.userId.equals(userId))
@@ -63,7 +92,7 @@ class UserDao extends DatabaseAccessor<MixinDatabase> with _$UserDaoMixin {
     required String conversationId,
     required String keyword,
   }) =>
-      db.fuzzySearchBotGroupUser(
+      _fuzzySearchBotGroupUser(
         conversationId,
         DateTime.now().subtract(const Duration(days: 7)),
         currentUserId,
@@ -71,32 +100,12 @@ class UserDao extends DatabaseAccessor<MixinDatabase> with _$UserDaoMixin {
         keyword,
       );
 
-  Selectable<User> fuzzySearchGroupUser({
-    required String currentUserId,
-    required String conversationId,
-    required String keyword,
-  }) =>
-      db.fuzzySearchGroupUser(
-        currentUserId,
-        conversationId,
-        keyword,
-        keyword,
-      );
-
-  Selectable<User> groupParticipants({required String conversationId}) =>
-      db.groupParticipants(conversationId);
-
   Selectable<User> friends() => (select(db.users)
     ..where((tbl) => tbl.relationship.equalsValue(sdk.UserRelationship.friend))
     ..orderBy([
       (tbl) => OrderingTerm.asc(tbl.fullName),
       (tbl) => OrderingTerm.asc(tbl.userId),
     ]));
-
-  Selectable<User> notInFriends(List<String> filterIds) =>
-      db.notInFriends(filterIds);
-
-  Selectable<User> usersByIn(List<String> userIds) => db.usersByIn(userIds);
 
   Selectable<User> fuzzySearchUser({
     required String id,
@@ -107,14 +116,14 @@ class UserDao extends DatabaseAccessor<MixinDatabase> with _$UserDaoMixin {
   }) {
     if (category?.type == SlideCategoryType.circle) {
       final circleId = category!.id;
-      return db.fuzzySearchUserInCircle((_, conversation, __) {
+      return _fuzzySearchUserInCircle((_, conversation, __) {
         if (!isIncludeConversation) {
           return conversation.status.isNull();
         }
         return const Constant(true);
       }, id, username, identityNumber, circleId);
     }
-    return db.fuzzySearchUser(
+    return _fuzzySearchUser(
         (_, conversation) {
           if (!isIncludeConversation) {
             return conversation.status.isNull();
@@ -149,12 +158,21 @@ class UserDao extends DatabaseAccessor<MixinDatabase> with _$UserDaoMixin {
         });
   }
 
-  Selectable<String?> biography(String userId) =>
-      db.biographyByIdentityNumber(userId);
+  Selectable<SearchItem> fuzzySearchUserItem(
+          String keyword, String currentUserId) =>
+      db.fuzzySearchUserItem(
+          keyword,
+          (users) =>
+              users.relationship.equalsValue(sdk.UserRelationship.friend) &
+              (users.fullName.likeEscape('%$keyword%') |
+                  users.identityNumber.likeEscape('%$keyword%')),
+          (users) => maxLimit);
 
   Future updateMuteUntil(String userId, String muteUntil) async {
     await (update(db.users)..where((tbl) => tbl.userId.equals(userId)))
         .write(UsersCompanion(muteUntil: Value(DateTime.tryParse(muteUntil))));
+
+    DataBaseEventBus.instance.updateUsers([userId]);
   }
 
   Future<List<String>> findMultiUserIdsByIdentityNumbers(
@@ -164,12 +182,20 @@ class UserDao extends DatabaseAccessor<MixinDatabase> with _$UserDaoMixin {
           .map((row) => row.userId)
           .get();
 
-  Selectable<MentionUser> userByIdentityNumbers(List<String> list) =>
-      db.userByIdentityNumbers(list);
-
   Future<bool> hasUser(String userIdOrIdentityNumber) => db.hasData(
       db.users,
       [],
       db.users.userId.equals(userIdOrIdentityNumber) |
           db.users.identityNumber.equals(userIdOrIdentityNumber));
+
+  Future<List<User>> getUsers({
+    required int limit,
+    required int offset,
+  }) =>
+      (select(db.users)
+            ..orderBy([
+              (tbl) => OrderingTerm.asc(tbl.rowId),
+            ])
+            ..limit(limit, offset: offset))
+          .get();
 }

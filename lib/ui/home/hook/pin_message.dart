@@ -4,11 +4,11 @@ import 'package:flutter_hooks/flutter_hooks.dart';
 
 import '../../../account/show_pin_message_key_value.dart';
 import '../../../blaze/vo/pin_message_minimal.dart';
+import '../../../db/database_event_bus.dart';
 import '../../../utils/extension/extension.dart';
 import '../../../utils/hook.dart';
 import '../../../widgets/message/item/pin_message.dart';
-import '../../../widgets/message/item/text/mention_builder.dart';
-import '../bloc/conversation_cubit.dart';
+import '../../provider/mention_cache_provider.dart';
 
 class PinMessageState extends Equatable {
   const PinMessageState({
@@ -35,20 +35,22 @@ extension PinMessageCubitExtension on BuildContext {
   String? get lastMessage => read<PinMessageState>().lastMessage;
 }
 
-PinMessageState usePinMessageState() {
+PinMessageState usePinMessageState(String? conversationId) {
   final context = useContext();
-  final conversationId =
-      useBlocStateConverter<ConversationCubit, ConversationState?, String?>(
-    converter: (state) => state?.conversationId,
-  );
 
   final pinMessageIds = useMemoizedStream<List<String>>(
     () {
       if (conversationId == null) return Stream.value([]);
       return context.database.pinMessageDao
-          .getPinMessageIds(conversationId)
-          .watchThrottle(kSlowThrottleDuration)
-          .map((event) => event.whereNotNull().toList());
+          .pinMessageIds(conversationId)
+          .watchWithStream(
+        eventStreams: [
+          DataBaseEventBus.instance.watchPinMessageStream(
+            conversationIds: [conversationId],
+          )
+        ],
+        duration: kSlowThrottleDuration,
+      ).map((event) => event.nonNulls.toList());
     },
     initialData: [],
     keys: [conversationId],
@@ -70,10 +72,19 @@ PinMessageState usePinMessageState() {
           pinMessageIds.firstOrNull == null) {
         return Stream.value(null);
       }
+      final messageId = pinMessageIds.first;
+
       return context.database.pinMessageDao
-          .pinMessageItem(conversationId, pinMessageIds.first)
-          .watchSingleOrNullThrottle(kSlowThrottleDuration)
-          .asyncMap((message) async {
+          .pinMessageItem(messageId, conversationId)
+          .watchSingleOrNullWithStream(
+        eventStreams: [
+          DataBaseEventBus.instance
+              .watchInsertOrReplaceMessageIdsStream(messageIds: [messageId]),
+          DataBaseEventBus.instance.deleteMessageIdStream.where(
+              (event) => event.any((element) => element.contains(messageId)))
+        ],
+        duration: kSlowThrottleDuration,
+      ).asyncMap((message) async {
         if (message == null) return null;
 
         final pinMessageMinimal =
@@ -81,7 +92,7 @@ PinMessageState usePinMessageState() {
         if (pinMessageMinimal == null) return null;
         final preview = await generatePinPreviewText(
           pinMessageMinimal: pinMessageMinimal,
-          mentionCache: context.read<MentionCache>(),
+          mentionCache: context.providerContainer.read(mentionCacheProvider),
         );
 
         return context.l10n.chatPinMessage(message.userFullName ?? '', preview);

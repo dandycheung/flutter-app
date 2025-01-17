@@ -3,10 +3,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart' hide Provider;
 import 'package:provider/provider.dart';
 
 import '../../../blaze/vo/pin_message_minimal.dart';
 import '../../../constants/resources.dart';
+import '../../../db/database_event_bus.dart';
 import '../../../db/mixin_database.dart';
 import '../../../utils/extension/extension.dart';
 import '../../../utils/hook.dart';
@@ -17,21 +19,31 @@ import '../../../widgets/interactive_decorated_box.dart';
 import '../../../widgets/message/item/audio_message.dart';
 import '../../../widgets/message/message.dart';
 import '../../../widgets/message/message_day_time.dart';
-import '../bloc/conversation_cubit.dart';
+import '../../provider/conversation_provider.dart';
 import '../chat/chat_page.dart';
 
-class PinMessagesPage extends HookWidget {
-  const PinMessagesPage({super.key});
+class PinMessagesPage extends HookConsumerWidget {
+  const PinMessagesPage(this.conversationState, {super.key});
+
+  final ConversationState conversationState;
 
   @override
-  Widget build(BuildContext context) {
-    final conversationId = useMemoized(
-        () => context.read<ConversationCubit>().state!.conversationId);
+  Widget build(BuildContext context, WidgetRef ref) {
+    final conversationId = conversationState.conversationId;
 
     final rawList = useMemoizedStream<List<MessageItem>>(
       () => context.database.pinMessageDao
           .messageItems(conversationId)
-          .watchThrottle(kDefaultThrottleDuration),
+          .watchWithStream(
+        eventStreams: [
+          DataBaseEventBus.instance.watchPinMessageStream(
+            conversationIds: [conversationId],
+          ),
+          DataBaseEventBus.instance.updateAssetStream,
+          DataBaseEventBus.instance.updateStickerStream,
+        ],
+        duration: kSlowThrottleDuration,
+      ),
       keys: [conversationId],
     ).data;
 
@@ -91,6 +103,7 @@ class PinMessagesPage extends HookWidget {
                   itemBuilder: (BuildContext context, int index) {
                     final messageItem = list[index];
                     return MessageItemWidget(
+                      key: ValueKey(messageItem.messageId),
                       prev: list.getOrNull(index + 1),
                       message: messageItem,
                       next: list.getOrNull(index - 1),
@@ -103,7 +116,7 @@ class PinMessagesPage extends HookWidget {
               ),
             ),
             InteractiveDecoratedBox(
-              cursor: MaterialStateMouseCursor.clickable,
+              cursor: SystemMouseCursors.click,
               onTap: () async {
                 await showMixinDialog<bool>(
                   context: context,

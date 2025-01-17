@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:mixin_bot_sdk_dart/mixin_bot_sdk_dart.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
@@ -13,8 +14,8 @@ import '../utils/hook.dart';
 
 class MessageStatusIcon extends StatelessWidget {
   const MessageStatusIcon({
-    super.key,
     required this.status,
+    super.key,
     this.color,
   });
 
@@ -29,14 +30,11 @@ class MessageStatusIcon extends StatelessWidget {
     switch (status) {
       case MessageStatus.sent:
         icon = Resources.assetsImagesSentSvg;
-        break;
       case MessageStatus.delivered:
         icon = Resources.assetsImagesDeliveredSvg;
-        break;
       case MessageStatus.read:
         icon = Resources.assetsImagesReadSvg;
         color = context.theme.accent;
-        break;
       case MessageStatus.sending:
       case MessageStatus.failed:
       case MessageStatus.unknown:
@@ -50,19 +48,18 @@ class MessageStatusIcon extends StatelessWidget {
   }
 }
 
-class _VisibilityAwareAnimatedSendingIcon extends HookWidget {
+class _VisibilityAwareAnimatedSendingIcon extends HookConsumerWidget {
   const _VisibilityAwareAnimatedSendingIcon({required this.color});
 
   final Color color;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final visible = useState(false);
     final key = useMemoized(UniqueKey.new);
-    final isMount = useIsMounted();
     return VisibilityDetector(
       onVisibilityChanged: (info) {
-        if (!isMount()) {
+        if (!context.mounted) {
           // onVisibilityChanged called by WidgetsBinding.postFrameCallback,
           // so it may be called after unmount.
           return;
@@ -78,7 +75,7 @@ class _VisibilityAwareAnimatedSendingIcon extends HookWidget {
   }
 }
 
-class _AnimatedMessageSendingIcon extends HookWidget {
+class _AnimatedMessageSendingIcon extends HookConsumerWidget {
   const _AnimatedMessageSendingIcon({
     required this.color,
     required this.play,
@@ -88,7 +85,7 @@ class _AnimatedMessageSendingIcon extends HookWidget {
   final bool play;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final time = useState(0);
 
     final play = useValueListenable(useImagePlaying(context)) && this.play;

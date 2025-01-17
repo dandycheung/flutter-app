@@ -1,43 +1,44 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:flutter_svg/svg.dart';
-import 'package:mixin_bot_sdk_dart/mixin_bot_sdk_dart.dart' hide User;
+import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:mixin_bot_sdk_dart/mixin_bot_sdk_dart.dart' hide Key, User;
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../../../blaze/vo/pin_message_minimal.dart';
-import '../../../bloc/bloc_converter.dart';
-import '../../../bloc/minute_timer_cubit.dart';
 import '../../../bloc/paging/paging_bloc.dart';
 import '../../../constants/resources.dart';
-import '../../../db/mixin_database.dart';
+import '../../../db/dao/conversation_dao.dart';
 import '../../../enum/message_category.dart';
 import '../../../utils/extension/extension.dart';
 import '../../../utils/hook.dart';
 import '../../../utils/message_optimize.dart';
 import '../../../widgets/avatar_view/avatar_view.dart';
-import '../../../widgets/conversation/verified_or_bot_widget.dart';
+import '../../../widgets/conversation/badges_widget.dart';
+import '../../../widgets/high_light_text.dart';
 import '../../../widgets/interactive_decorated_box.dart';
 import '../../../widgets/message/item/pin_message.dart';
 import '../../../widgets/message/item/system_message.dart';
-import '../../../widgets/message/item/text/mention_builder.dart';
 import '../../../widgets/message_status_icon.dart';
 import '../../../widgets/unread_text.dart';
-import '../bloc/conversation_cubit.dart';
+import '../../provider/conversation_provider.dart';
+import '../../provider/mention_cache_provider.dart';
+import '../../provider/minute_timer_provider.dart';
+import '../../provider/responsive_navigator_provider.dart';
+import '../../provider/slide_category_provider.dart';
 import '../bloc/conversation_list_bloc.dart';
-import '../bloc/slide_category_cubit.dart';
-import '../route/responsive_navigator_cubit.dart';
 import 'audio_player_bar.dart';
 import 'conversation_page.dart';
 import 'menu_wrapper.dart';
 import 'network_status.dart';
 
-class ConversationList extends HookWidget {
+class ConversationList extends HookConsumerWidget {
   const ConversationList({
     required Key key,
   }) : super(key: key);
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final slideCategoryState =
         (key! as PageStorageKey<SlideCategoryState>).value;
 
@@ -46,17 +47,21 @@ class ConversationList extends HookWidget {
         useBlocState<ConversationListBloc, PagingState<ConversationItem>>(
       bloc: conversationListBloc,
     );
-    final conversationId =
-        useBlocStateConverter<ConversationCubit, ConversationState?, String?>(
-      converter: (state) => state?.conversationId,
-    );
+    final conversationId = ref.watch(currentConversationIdProvider);
 
-    final routeMode = useBlocStateConverter<ResponsiveNavigatorCubit,
-        ResponsiveNavigatorState, bool>(
-      converter: (state) => state.routeMode,
-    );
+    final routeMode = ref.watch(navigatorRouteModeProvider);
+
+    final itemPositionsListener =
+        conversationListBloc.itemPositionsListener(slideCategoryState);
+    final itemScrollController =
+        conversationListBloc.itemScrollController(slideCategoryState);
+
+    if (itemPositionsListener == null || itemScrollController == null) {
+      return const SizedBox();
+    }
 
     Widget child;
+
     child = pagingState.count == 0
         ? pagingState.hasData
             ? Center(
@@ -68,11 +73,9 @@ class ConversationList extends HookWidget {
             : const _Empty()
         : ScrollablePositionedList.builder(
             key: PageStorageKey(slideCategoryState),
-            itemPositionsListener:
-                conversationListBloc.itemPositionsListener(slideCategoryState),
+            itemPositionsListener: itemPositionsListener,
             itemCount: pagingState.count,
-            itemScrollController:
-                conversationListBloc.itemScrollController(slideCategoryState),
+            itemScrollController: itemScrollController,
             itemBuilder: (context, index) {
               final conversation = pagingState.map[index];
               if (conversation == null) return const SizedBox(height: 80);
@@ -85,7 +88,7 @@ class ConversationList extends HookWidget {
                   selected: selected,
                   conversation: conversation,
                   onTap: () {
-                    ConversationCubit.selectConversation(
+                    ConversationStateNotifier.selectConversation(
                         context, conversation.conversationId,
                         conversation: conversation);
                   },
@@ -138,10 +141,10 @@ class _Empty extends StatelessWidget {
 
 class ConversationItemWidget extends StatelessWidget {
   const ConversationItemWidget({
-    super.key,
-    this.selected = false,
     required this.conversation,
     required this.onTap,
+    super.key,
+    this.selected = false,
   });
 
   final bool selected;
@@ -155,6 +158,7 @@ class ConversationItemWidget extends StatelessWidget {
       height: ConversationPage.conversationItemHeight,
       child: InteractiveDecoratedBox(
         onTap: onTap,
+        decoration: BoxDecoration(color: context.theme.primary),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8),
           child: DecoratedBox(
@@ -185,7 +189,7 @@ class ConversationItemWidget extends StatelessWidget {
                                 child: Row(
                                   children: [
                                     Flexible(
-                                      child: Text(
+                                      child: CustomText(
                                         conversation.validName,
                                         style: TextStyle(
                                           color: context.theme.text,
@@ -195,25 +199,29 @@ class ConversationItemWidget extends StatelessWidget {
                                         overflow: TextOverflow.ellipsis,
                                       ),
                                     ),
-                                    VerifiedOrBotWidget(
+                                    BadgesWidget(
                                       verified: conversation.ownerVerified,
                                       isBot: conversation.isBotConversation,
+                                      membership: conversation.membership,
                                     ),
                                   ],
                                 ),
                               ),
-                              BlocConverter<MinuteTimerCubit, DateTime, String>(
-                                converter: (_) =>
-                                    (conversation.lastMessageCreatedAt ??
-                                            conversation.createdAt)
-                                        .format,
-                                builder: (context, text) => Text(
-                                  text,
-                                  style: TextStyle(
-                                    color: messageColor,
-                                    fontSize: 12,
-                                  ),
-                                ),
+                              Consumer(
+                                builder: (context, ref, _) {
+                                  final text = ref.watch(
+                                    formattedDateTimeProvider(
+                                        conversation.lastMessageCreatedAt ??
+                                            conversation.createdAt),
+                                  );
+                                  return Text(
+                                    text,
+                                    style: TextStyle(
+                                      color: messageColor,
+                                      fontSize: 12,
+                                    ),
+                                  );
+                                },
                               ),
                             ],
                           ),
@@ -286,31 +294,42 @@ class _MessagePreview extends StatelessWidget {
   final ConversationItem conversation;
 
   @override
-  Widget build(BuildContext context) => Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _MessageStatusIcon(conversation: conversation),
-          const SizedBox(width: 2),
-          Expanded(
-            child: _MessageContent(conversation: conversation),
-          ),
-        ],
-      );
+  Widget build(BuildContext context) {
+    final quited = conversation.status == ConversationStatus.quit;
+    final hasDraft = !quited && (conversation.draft?.isNotEmpty ?? false);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (!hasDraft) _MessageStatusIcon(conversation: conversation),
+        if (!hasDraft) const SizedBox(width: 2),
+        Expanded(
+          child:
+              _MessageContent(conversation: conversation, hasDraft: hasDraft),
+        ),
+      ],
+    );
+  }
 }
 
-class _MessageContent extends HookWidget {
+class _MessageContent extends HookConsumerWidget {
   const _MessageContent({
     required this.conversation,
+    required this.hasDraft,
   });
 
   final ConversationItem conversation;
+  final bool hasDraft;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final text = useMemoizedFuture(
       () async {
+        if (hasDraft) return conversation.draft;
         final isGroup = conversation.category == ConversationCategory.group ||
             conversation.senderId != conversation.ownerId;
+
+        final mentionCache = ref.read(mentionCacheProvider);
+
         if (conversation.contentType == MessageCategory.systemConversation) {
           return generateSystemText(
             actionName: conversation.actionName,
@@ -330,13 +349,11 @@ class _MessageContent extends HookWidget {
           }
           final preview = await generatePinPreviewText(
             pinMessageMinimal: pinMessageMinimal,
-            mentionCache: context.read<MentionCache>(),
+            mentionCache: mentionCache,
           );
           return context.l10n
               .chatPinMessage(conversation.senderFullName ?? '', preview);
         }
-
-        final mentionCache = context.read<MentionCache>();
 
         return messagePreviewOptimize(
           conversation.messageStatus,
@@ -362,6 +379,8 @@ class _MessageContent extends HookWidget {
         conversation.participantFullName,
         conversation.senderFullName,
         conversation.groupName,
+        conversation.draft,
+        hasDraft,
       ],
     ).data;
 
@@ -375,20 +394,28 @@ class _MessageContent extends HookWidget {
           conversation.contentType,
         ]);
 
-    if (conversation.contentType == null) return const SizedBox();
+    if (conversation.contentType == null && !hasDraft) return const SizedBox();
 
     final dynamicColor = context.theme.secondaryText;
 
     return Row(
       children: [
-        if (icon != null)
+        if (!hasDraft && icon != null)
           SvgPicture.asset(
             icon,
             colorFilter: ColorFilter.mode(dynamicColor, BlendMode.srcIn),
           ),
+        if (hasDraft)
+          Text(
+            '${context.l10n.draft}:',
+            style: TextStyle(
+              color: context.theme.red,
+              fontSize: 14,
+            ),
+          ),
         if (text != null)
           Expanded(
-            child: Text(
+            child: CustomText(
               text.overflow,
               style: TextStyle(
                 color: dynamicColor,
@@ -412,7 +439,7 @@ class _MessageStatusIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (context.multiAuthState.currentUserId == conversation.senderId &&
+    if (context.account?.userId == conversation.senderId &&
         conversation.contentType != MessageCategory.systemConversation &&
         conversation.contentType != MessageCategory.systemAccountSnapshot &&
         !conversation.contentType.isCallMessage &&

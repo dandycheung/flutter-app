@@ -1,15 +1,16 @@
 import 'dart:math';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:mixin_bot_sdk_dart/mixin_bot_sdk_dart.dart' hide User;
 
 import '../../db/mixin_database.dart';
-import '../../ui/home/bloc/conversation_cubit.dart';
+import '../../ui/provider/conversation_provider.dart';
 import '../../utils/extension/extension.dart';
 import '../avatar_view/avatar_view.dart';
 import '../buttons.dart';
 import '../dialog.dart';
+import '../high_light_text.dart';
 import '../toast.dart';
 
 Future<void> showConversationDialog(BuildContext context,
@@ -22,10 +23,10 @@ Future<void> showConversationDialog(BuildContext context,
   }
 
   final existed = conversationResponse.participants
-      .any((element) => element.userId == context.multiAuthState.currentUserId);
+      .any((element) => element.userId == context.account?.userId);
   if (existed) {
     showToast(context.l10n.groupAlreadyIn);
-    await ConversationCubit.selectConversation(
+    await ConversationStateNotifier.selectConversation(
       context,
       conversationResponse.conversationId,
     );
@@ -68,8 +69,8 @@ class _ConversationDialog extends StatelessWidget {
             width: 340,
             child: Column(
               children: [
-                Row(
-                  children: const [
+                const Row(
+                  children: [
                     Spacer(),
                     Padding(
                       padding: EdgeInsets.only(right: 12, top: 12),
@@ -89,7 +90,7 @@ class _ConversationDialog extends StatelessWidget {
       );
 }
 
-class _ConversationInfo extends HookWidget {
+class _ConversationInfo extends HookConsumerWidget {
   const _ConversationInfo({
     required this.conversationResponse,
     required this.users,
@@ -101,7 +102,7 @@ class _ConversationInfo extends HookWidget {
   final String code;
 
   @override
-  Widget build(BuildContext context) => Column(
+  Widget build(BuildContext context, WidgetRef ref) => Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           ClipOval(
@@ -111,7 +112,7 @@ class _ConversationInfo extends HookWidget {
             ),
           ),
           const SizedBox(height: 8),
-          SelectableText(
+          CustomSelectableText(
             conversationResponse.name,
             style: TextStyle(
               color: context.theme.text,
@@ -121,7 +122,7 @@ class _ConversationInfo extends HookWidget {
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 4),
-          SelectableText(
+          CustomSelectableText(
             context.l10n
                 .participantsCount(conversationResponse.participants.length),
             style: TextStyle(
@@ -134,7 +135,7 @@ class _ConversationInfo extends HookWidget {
             onTap: () => runFutureWithToast(
               () async {
                 await context.accountServer.joinGroup(code);
-                await ConversationCubit.selectConversation(
+                await ConversationStateNotifier.selectConversation(
                     context, conversationResponse.conversationId);
                 Navigator.pop(context);
               }(),

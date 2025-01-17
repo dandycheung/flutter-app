@@ -1,24 +1,22 @@
 import 'dart:async';
-import 'dart:io';
-import 'dart:ui';
 
 import 'package:drift/drift.dart';
-import 'package:drift/isolate.dart';
-import 'package:drift/native.dart';
-import 'package:flutter/foundation.dart';
 import 'package:mixin_bot_sdk_dart/mixin_bot_sdk_dart.dart';
-import 'package:path/path.dart' as p;
 
+import '../constants/constants.dart';
 import '../enum/media_status.dart';
-import '../utils/file.dart';
+import '../enum/property_group.dart';
 import 'converter/conversation_category_type_converter.dart';
 import 'converter/conversation_status_type_converter.dart';
 import 'converter/media_status_type_converter.dart';
+import 'converter/membership_converter.dart';
 import 'converter/message_status_type_converter.dart';
 import 'converter/millis_date_converter.dart';
 import 'converter/participant_role_converter.dart';
+import 'converter/property_group_converter.dart';
+import 'converter/safe_deposit_type_converter.dart';
+import 'converter/safe_withdrawal_type_converter.dart';
 import 'converter/user_relationship_converter.dart';
-import 'custom_vm_database_wrapper.dart';
 import 'dao/address_dao.dart';
 import 'dao/app_dao.dart';
 import 'dao/asset_dao.dart';
@@ -31,6 +29,8 @@ import 'dao/favorite_app_dao.dart';
 import 'dao/fiat_dao.dart';
 import 'dao/flood_message_dao.dart';
 import 'dao/hyperlink_dao.dart';
+import 'dao/inscription_collection_dao.dart';
+import 'dao/inscription_item_dao.dart';
 import 'dao/job_dao.dart';
 import 'dao/message_dao.dart';
 import 'dao/message_history_dao.dart';
@@ -39,14 +39,20 @@ import 'dao/offset_dao.dart';
 import 'dao/participant_dao.dart';
 import 'dao/participant_session_dao.dart';
 import 'dao/pin_message_dao.dart';
+import 'dao/property_dao.dart';
 import 'dao/resend_session_message_dao.dart';
+import 'dao/safe_snapshot_dao.dart';
 import 'dao/sent_session_sender_key_dao.dart';
 import 'dao/snapshot_dao.dart';
 import 'dao/sticker_album_dao.dart';
 import 'dao/sticker_dao.dart';
 import 'dao/sticker_relationship_dao.dart';
+import 'dao/token_dao.dart';
+import 'dao/transcript_message_dao.dart';
 import 'dao/user_dao.dart';
 import 'database_event_bus.dart';
+import 'extension/job.dart';
+import 'util/open_database.dart';
 import 'util/util.dart';
 
 part 'mixin_database.g.dart';
@@ -54,17 +60,7 @@ part 'mixin_database.g.dart';
 @DriftDatabase(
   include: {
     'moor/mixin.drift',
-    'moor/dao/conversation.drift',
-    'moor/dao/message.drift',
-    'moor/dao/participant.drift',
-    'moor/dao/sticker.drift',
-    'moor/dao/sticker_album.drift',
-    'moor/dao/user.drift',
-    'moor/dao/circle.drift',
-    'moor/dao/flood.drift',
-    'moor/dao/pin_message.drift',
-    'moor/dao/sticker_relationship.drift',
-    'moor/dao/favorite_app.drift',
+    'moor/dao/common.drift',
   },
   daos: [
     AddressDao,
@@ -94,18 +90,21 @@ part 'mixin_database.g.dart';
     FavoriteAppDao,
     ExpiredMessageDao,
     ChainDao,
+    PropertyDao,
+    TranscriptMessageDao,
+    SafeSnapshotDao,
+    TokenDao,
+    InscriptionItemDao,
+    InscriptionCollectionDao,
   ],
-  queries: {},
 )
 class MixinDatabase extends _$MixinDatabase {
   MixinDatabase(super.e);
 
-  MixinDatabase.connect(super.c) : super.connect();
-
   @override
-  int get schemaVersion => 20;
+  int get schemaVersion => 27;
 
-  final eventBus = DataBaseEventBus();
+  final eventBus = DataBaseEventBus.instance;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -229,6 +228,38 @@ class MixinDatabase extends _$MixinDatabase {
           if (from <= 19) {
             await m.drop(Trigger('', 'conversation_last_message_delete'));
           }
+          if (from <= 21) {
+            await _addColumnIfNotExists(m, snapshots, snapshots.snapshotHash);
+            await _addColumnIfNotExists(m, snapshots, snapshots.openingBalance);
+            await _addColumnIfNotExists(m, snapshots, snapshots.closingBalance);
+          }
+          if (from <= 22) {
+            await m.createTable(properties);
+          }
+          if (from <= 23) {
+            await _addColumnIfNotExists(m, users, users.isDeactivated);
+          }
+          if (from <= 24) {
+            await m.createTable(safeSnapshots);
+            await m.createTable(tokens);
+            await m.createIndex(indexTokensKernelAssetId);
+          }
+          if (from <= 25) {
+            await _addColumnIfNotExists(
+                m, safeSnapshots, safeSnapshots.inscriptionHash);
+            await _addColumnIfNotExists(m, tokens, tokens.collectionHash);
+            await m.createIndex(indexTokensCollectionHash);
+            await m.createTable(inscriptionCollections);
+            await m.createTable(inscriptionItems);
+          }
+          if (from <= 26) {
+            await _addColumnIfNotExists(m, users, users.membership);
+          }
+        },
+        beforeOpen: (details) async {
+          if (details.hadUpgrade && details.versionBefore! <= 20) {
+            await jobDao.insert(createMigrationFtsJob(null));
+          }
         },
       );
 
@@ -246,19 +277,6 @@ class MixinDatabase extends _$MixinDatabase {
     return queryRow.read<bool>('CNTREC');
   }
 
-  Stream<bool> watchHasData<T extends HasResultSet, R>(
-    ResultSetImplementation<T, R> table, [
-    List<Join> joins = const [],
-    Expression<bool> predicate = ignoreWhere,
-  ]) =>
-      (selectOnly(table)
-            ..addColumns([const CustomExpression<String>('1')])
-            ..join(joins)
-            ..where(predicate)
-            ..limit(1))
-          .watch()
-          .map((event) => event.isNotEmpty);
-
   Future<bool> hasData<T extends HasResultSet, R>(
     ResultSetImplementation<T, R> table, [
     List<Join> joins = const [],
@@ -273,65 +291,17 @@ class MixinDatabase extends _$MixinDatabase {
           .isNotEmpty;
 }
 
-QueryExecutor _openConnection(File dbFile) => CustomVmDatabaseWrapper(
-      NativeDatabase(
-        dbFile,
-        setup: (rawDb) {
-          rawDb
-            ..execute('PRAGMA journal_mode=WAL;')
-            ..execute('PRAGMA foreign_keys=ON;')
-            ..execute('PRAGMA synchronous=NORMAL;');
-        },
-      ),
-      logStatements: true,
-      explain: kDebugMode,
-    );
-
 /// Connect to the database.
 Future<MixinDatabase> connectToDatabase(
   String identityNumber, {
+  int readCount = 8,
   bool fromMainIsolate = false,
 }) async {
-  final backgroundPortName = 'one_mixin_drift_background_$identityNumber';
-
-  final driftIsolate = await _crateIsolate(
-    identityNumber,
-    backgroundPortName,
+  final queryExecutor = await openQueryExecutor(
+    identityNumber: identityNumber,
+    dbName: kDbFileName,
+    readCount: readCount,
     fromMainIsolate: fromMainIsolate,
   );
-
-  final connect = await driftIsolate.connect();
-
-  return MixinDatabase.connect(connect);
-}
-
-Future<DriftIsolate> _crateIsolate(
-  String identityNumber,
-  String name, {
-  bool fromMainIsolate = false,
-}) async {
-  if (fromMainIsolate) {
-    // Remove port if it exists. to avoid port leak on hot reload.
-    IsolateNameServer.removePortNameMapping(name);
-  }
-
-  final existedSendPort = IsolateNameServer.lookupPortByName(name);
-
-  if (existedSendPort == null) {
-    assert(fromMainIsolate, 'Isolate should be created from main isolate');
-
-    final dbFile =
-        File(p.join(mixinDocumentsDirectory.path, identityNumber, 'mixin.db'));
-
-    final driftIsolate = await DriftIsolate.spawn(
-      () => LazyDatabase(
-        () => _openConnection(dbFile),
-      ),
-    );
-
-    IsolateNameServer.registerPortWithName(driftIsolate.connectPort, name);
-    return driftIsolate;
-  } else {
-    return DriftIsolate.fromConnectPort(existedSendPort, serialize: false);
-  }
+  return MixinDatabase(queryExecutor);
 }

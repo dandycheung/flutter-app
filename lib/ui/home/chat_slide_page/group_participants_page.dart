@@ -1,43 +1,50 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:mixin_bot_sdk_dart/mixin_bot_sdk_dart.dart';
+import 'package:super_context_menu/super_context_menu.dart';
 
+import '../../../constants/constants.dart';
+import '../../../constants/icon_fonts.dart';
 import '../../../constants/resources.dart';
-import '../../../db/mixin_database.dart';
+import '../../../db/dao/participant_dao.dart';
+import '../../../db/database_event_bus.dart';
 import '../../../utils/extension/extension.dart';
 import '../../../utils/hook.dart';
-import '../../../widgets/action_button.dart';
 import '../../../widgets/app_bar.dart';
 import '../../../widgets/avatar_view/avatar_view.dart';
-import '../../../widgets/conversation/verified_or_bot_widget.dart';
+import '../../../widgets/conversation/badges_widget.dart';
 import '../../../widgets/high_light_text.dart';
 import '../../../widgets/menu.dart';
 import '../../../widgets/search_text_field.dart';
 import '../../../widgets/toast.dart';
 import '../../../widgets/user/user_dialog.dart';
 import '../../../widgets/user_selector/conversation_selector.dart';
-import '../bloc/conversation_cubit.dart';
+import '../../provider/conversation_provider.dart';
 import 'group_invite/group_invite_dialog.dart';
 
 /// The participants of group.
-class GroupParticipantsPage extends HookWidget {
-  const GroupParticipantsPage({super.key});
+class GroupParticipantsPage extends HookConsumerWidget {
+  const GroupParticipantsPage(this.conversationState, {super.key});
+
+  final ConversationState conversationState;
 
   @override
-  Widget build(BuildContext context) {
-    final conversationId = useMemoized(() {
-      final conversationId =
-          context.read<ConversationCubit>().state?.conversationId;
-      assert(conversationId != null);
-      return conversationId!;
-    });
+  Widget build(BuildContext context, WidgetRef ref) {
+    final conversationId = conversationState.conversationId;
 
     final participants = useMemoizedStream(() {
           final dao = context.database.participantDao;
           return dao
               .groupParticipantsByConversationId(conversationId)
-              .watchThrottle(kSlowThrottleDuration);
+              .watchWithStream(
+            eventStreams: [
+              DataBaseEventBus.instance.watchUpdateParticipantStream(
+                  conversationIds: [conversationId])
+            ],
+            duration: kDefaultThrottleDuration,
+          );
         }, keys: [conversationId]).data ??
         const <ParticipantUser>[];
 
@@ -83,7 +90,7 @@ class GroupParticipantsPage extends HookWidget {
   }
 }
 
-class _ParticipantList extends HookWidget {
+class _ParticipantList extends HookConsumerWidget {
   const _ParticipantList({
     required this.filterKeyword,
     required this.participants,
@@ -99,7 +106,7 @@ class _ParticipantList extends HookWidget {
   final ParticipantUser? currentUser;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final keyword = useValueListenable(filterKeyword).text.trim();
     final filteredParticipants = useMemoized(() {
       if (keyword.isEmpty) {
@@ -125,7 +132,7 @@ class _ParticipantList extends HookWidget {
   }
 }
 
-class _ParticipantTile extends StatelessWidget {
+class _ParticipantTile extends HookWidget {
   const _ParticipantTile({
     required this.participant,
     required this.currentUser,
@@ -142,49 +149,56 @@ class _ParticipantTile extends StatelessWidget {
   Widget build(BuildContext context) => _ParticipantMenuEntry(
         participant: participant,
         currentUser: currentUser,
-        child: ListTile(
-          contentPadding:
-              const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
-          leading: AvatarWidget(
-            size: 50,
-            avatarUrl: participant.avatarUrl,
-            userId: participant.userId,
-            name: participant.fullName,
-          ),
-          title: Row(
-            children: [
-              Flexible(
-                child: HighlightText(
-                  participant.fullName ?? '?',
-                  style: TextStyle(
-                    color: context.theme.text,
-                    fontSize: 16,
-                  ),
-                  highlightTextSpans: [
-                    HighlightTextSpan(
-                      keyword,
-                      style: TextStyle(
-                        color: context.theme.accent,
+        child: Material(
+          color: context.theme.primary,
+          child: ListTile(
+            contentPadding:
+                const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+            leading: AvatarWidget(
+              size: 50,
+              avatarUrl: participant.avatarUrl,
+              userId: participant.userId,
+              name: participant.fullName,
+            ),
+            title: Row(
+              children: [
+                Flexible(
+                  child: CustomText(
+                    participant.fullName ?? '?',
+                    style: TextStyle(
+                      color: context.theme.text,
+                      fontSize: 16,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textMatchers: [
+                      EmojiTextMatcher(),
+                      KeyWordTextMatcher(
+                        keyword,
+                        style: TextStyle(
+                          color: context.theme.accent,
+                        ),
                       ),
-                    )
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              VerifiedOrBotWidget(
-                isBot: participant.appId != null,
-                verified: participant.isVerified,
-              ),
-            ],
+                BadgesWidget(
+                  isBot: participant.appId != null,
+                  verified: participant.isVerified,
+                  membership: participant.membership,
+                ),
+              ],
+            ),
+            onTap: () {
+              showUserDialog(context, participant.userId);
+            },
+            trailing: _RoleWidget(role: participant.role),
           ),
-          onTap: () {
-            showUserDialog(context, participant.userId);
-          },
-          trailing: _RoleWidget(role: participant.role),
         ),
       );
 }
 
-class _ParticipantMenuEntry extends StatelessWidget {
+class _ParticipantMenuEntry extends HookConsumerWidget {
   const _ParticipantMenuEntry({
     required this.child,
     required this.participant,
@@ -196,66 +210,77 @@ class _ParticipantMenuEntry extends StatelessWidget {
   final Widget child;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final self = participant.userId == context.accountServer.userId;
     if (self) {
       return child;
     }
 
-    return ContextMenuPortalEntry(
-      buildMenus: () {
-        final menus = [
-          ContextMenu(
-            icon: Resources.assetsImagesContextMenuChatSvg,
+    return CustomContextMenuWidget(
+      desktopMenuWidgetBuilder: CustomDesktopMenuWidgetBuilder(),
+      menuProvider: (request) => MenusWithSeparator(childrens: [
+        [
+          MenuAction(
+            image: MenuImage.icon(IconFonts.chat),
             title:
                 context.l10n.groupPopMenuMessage(participant.fullName ?? '?'),
-            onTap: () {
-              ConversationCubit.selectUser(
+            callback: () {
+              ConversationStateNotifier.selectUser(
                 context,
                 participant.userId,
               );
             },
           ),
-        ];
-        if (currentUser?.role == ParticipantRole.owner) {
-          if (participant.role != ParticipantRole.admin) {
-            menus.add(ContextMenu(
-              icon: Resources.assetsImagesContextMenuUserEditSvg,
-              title: context.l10n.makeGroupAdmin,
-              onTap: () => runFutureWithToast(
-                context.accountServer.updateParticipantRole(
-                    context.read<ConversationCubit>().state!.conversationId,
-                    participant.userId,
-                    ParticipantRole.admin),
-              ),
-            ));
-          } else {
-            menus.add(ContextMenu(
-              icon: Resources.assetsImagesContextMenuStopSvg,
-              title: context.l10n.dismissAsAdmin,
-              onTap: () => runFutureWithToast(context.accountServer
-                  .updateParticipantRole(
-                      context.read<ConversationCubit>().state!.conversationId,
-                      participant.userId,
-                      null)),
-            ));
-          }
-        }
+        ],
+        if (currentUser?.role == ParticipantRole.owner)
+          [
+            if (participant.role != ParticipantRole.admin)
+              MenuAction(
+                image: MenuImage.icon(IconFonts.manageUser),
+                title: context.l10n.makeGroupAdmin,
+                callback: () {
+                  final conversationId =
+                      ref.read(currentConversationIdProvider);
+                  if (conversationId == null) return;
 
-        if (currentUser?.role != null && participant.role == null ||
-            currentUser?.role == ParticipantRole.owner) {
-          menus.add(ContextMenu(
-            icon: Resources.assetsImagesContextMenuDeleteSvg,
-            isDestructiveAction: true,
-            title: context.l10n.groupPopMenuRemove(participant.fullName ?? '?'),
-            onTap: () => runFutureWithToast(context.accountServer
-                .removeParticipant(
-                    context.read<ConversationCubit>().state!.conversationId,
-                    participant.userId)),
-          ));
-        }
-        return menus;
-      },
+                  runFutureWithToast(
+                    context.accountServer.updateParticipantRole(conversationId,
+                        participant.userId, ParticipantRole.admin),
+                  );
+                },
+              )
+            else
+              MenuAction(
+                image: MenuImage.icon(IconFonts.stop),
+                title: context.l10n.dismissAsAdmin,
+                callback: () {
+                  final conversationId =
+                      ref.read(currentConversationIdProvider);
+                  if (conversationId == null) return;
+
+                  runFutureWithToast(context.accountServer
+                      .updateParticipantRole(
+                          conversationId, participant.userId, null));
+                },
+              )
+          ],
+        [
+          if (currentUser?.role != null && participant.role == null ||
+              currentUser?.role == ParticipantRole.owner)
+            MenuAction(
+              image: MenuImage.icon(IconFonts.delete),
+              title:
+                  context.l10n.groupPopMenuRemove(participant.fullName ?? '?'),
+              callback: () {
+                final conversationId = ref.read(currentConversationIdProvider);
+                if (conversationId == null) return;
+
+                runFutureWithToast(context.accountServer
+                    .removeParticipant(conversationId, participant.userId));
+              },
+            )
+        ]
+      ]),
       child: child,
     );
   }
@@ -296,7 +321,12 @@ class _RoleLabel extends StatelessWidget {
       );
 }
 
-class _ActionAddParticipants extends StatelessWidget {
+enum _ActionType {
+  addParticipants,
+  inviteByLink,
+}
+
+class _ActionAddParticipants extends HookConsumerWidget {
   const _ActionAddParticipants({
     required this.participants,
   });
@@ -304,47 +334,52 @@ class _ActionAddParticipants extends StatelessWidget {
   final List<ParticipantUser> participants;
 
   @override
-  Widget build(BuildContext context) => ContextMenuPortalEntry(
-        buildMenus: () => [
-          ContextMenu(
+  Widget build(BuildContext context, WidgetRef ref) => CustomPopupMenuButton(
+        itemBuilder: (context) => [
+          CustomPopupMenuItem(
             icon: Resources.assetsImagesContextMenuSearchUserSvg,
             title: context.l10n.addParticipants,
-            onTap: () async {
-              final result = await showConversationSelector(
-                context: context,
-                singleSelect: false,
-                title: context.l10n.addParticipants,
-                onlyContact: true,
-              );
-              if (result == null || result.isEmpty) return;
-
-              final userIds =
-                  result.map((e) => e.userId).whereNotNull().toList();
-              final conversationId =
-                  context.read<ConversationCubit>().state?.conversationId;
-              assert(conversationId != null);
-              await runFutureWithToast(
-                context.accountServer.addParticipant(conversationId!, userIds),
-              );
-            },
+            value: _ActionType.addParticipants,
           ),
-          ContextMenu(
+          CustomPopupMenuItem(
             icon: Resources.assetsImagesContextMenuLinkSvg,
             title: context.l10n.inviteToGroupViaLink,
-            onTap: () {
-              final conversationCubit = context.read<ConversationCubit>().state;
-              assert(conversationCubit != null);
-              showGroupInviteByLinkDialog(context,
-                  conversationId: conversationCubit!.conversationId);
-            },
+            value: _ActionType.inviteByLink,
           ),
         ],
-        child: Builder(
-            builder: (context) => ActionButton(
-                  name: Resources.assetsImagesIcAddSvg,
-                  color: context.theme.icon,
-                  onTapUp: (event) =>
-                      context.sendMenuPosition(event.globalPosition),
-                )),
+        onSelected: (action) async {
+          switch (action) {
+            case _ActionType.addParticipants:
+              {
+                final result = await showConversationSelector(
+                  context: context,
+                  singleSelect: false,
+                  title: context.l10n.addParticipants,
+                  onlyContact: true,
+                  maxSelect: kMaxGroupParticipants - participants.length,
+                );
+                if (result == null || result.isEmpty) return;
+
+                final userIds = result.map((e) => e.userId).nonNulls.toList();
+                final conversationId = ref.read(currentConversationIdProvider);
+                if (conversationId == null) return;
+
+                await runFutureWithToast(
+                  context.accountServer.addParticipant(conversationId, userIds),
+                );
+                break;
+              }
+            case _ActionType.inviteByLink:
+              {
+                final conversationId = ref.read(currentConversationIdProvider);
+                if (conversationId == null) return;
+
+                await showGroupInviteByLinkDialog(context,
+                    conversationId: conversationId);
+                break;
+              }
+          }
+        },
+        icon: Resources.assetsImagesIcAddSvg,
       );
 }

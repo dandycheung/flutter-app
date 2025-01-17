@@ -4,37 +4,44 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:flutter_svg/svg.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:mixin_bot_sdk_dart/mixin_bot_sdk_dart.dart' hide User;
 import 'package:rxdart/rxdart.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
-import 'package:stream_transform/stream_transform.dart';
 
 import '../../../blaze/vo/pin_message_minimal.dart';
-import '../../../bloc/bloc_converter.dart';
-import '../../../bloc/keyword_cubit.dart';
-import '../../../bloc/minute_timer_cubit.dart';
-import '../../../bloc/paging/paging_bloc.dart';
+import '../../../constants/resources.dart';
+import '../../../db/dao/conversation_dao.dart';
+import '../../../db/dao/message_dao.dart';
+import '../../../db/database_event_bus.dart';
 import '../../../db/extension/conversation.dart';
 import '../../../db/mixin_database.dart';
 import '../../../enum/message_category.dart';
 import '../../../utils/extension/extension.dart';
 import '../../../utils/hook.dart';
+import '../../../utils/logger.dart';
 import '../../../utils/message_optimize.dart';
 import '../../../utils/reg_exp_utils.dart';
 import '../../../utils/uri_utils.dart';
+import '../../../utils/web_view/web_view_interface.dart';
 import '../../../widgets/avatar_view/avatar_view.dart';
-import '../../../widgets/conversation/verified_or_bot_widget.dart';
+import '../../../widgets/conversation/badges_widget.dart';
 import '../../../widgets/high_light_text.dart';
 import '../../../widgets/interactive_decorated_box.dart';
 import '../../../widgets/message/item/pin_message.dart';
 import '../../../widgets/message/item/system_message.dart';
-import '../../../widgets/message/item/text/mention_builder.dart';
+import '../../../widgets/mixin_image.dart';
 import '../../../widgets/toast.dart';
 import '../../../widgets/user/user_dialog.dart';
-import '../bloc/conversation_cubit.dart';
-import '../bloc/conversation_filter_unseen_cubit.dart';
+import '../../provider/conversation_provider.dart';
+import '../../provider/conversation_unseen_filter_enabled.dart';
+import '../../provider/keyword_provider.dart';
+import '../../provider/mention_cache_provider.dart';
+import '../../provider/minute_timer_provider.dart';
+import '../../provider/search_mao_user_provider.dart';
+import '../../provider/slide_category_provider.dart';
 import '../bloc/conversation_list_bloc.dart';
-import '../bloc/slide_category_cubit.dart';
+import '../bloc/search_message_cubit.dart';
 import 'conversation_page.dart';
 import 'menu_wrapper.dart';
 import 'unseen_conversation_list.dart';
@@ -42,48 +49,35 @@ import 'unseen_conversation_list.dart';
 const _defaultLimit = 3;
 
 void _clear(BuildContext context) {
-  context.read<KeywordCubit>().emit('');
+  context.providerContainer.read(keywordProvider.notifier).state = '';
   context.read<TextEditingController>().text = '';
   context.read<FocusNode>().unfocus();
 }
 
-class SearchList extends HookWidget {
+class SearchList extends HookConsumerWidget {
   const SearchList({super.key, this.filterUnseen = false});
 
   final bool filterUnseen;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final keyword = useMemoizedStream(
           () {
-            final keywordCubit = context.read<KeywordCubit>();
-            return Stream.value(keywordCubit.state)
-                .merge(keywordCubit.stream)
-                .map((event) => event.trim())
-                .distinct()
-                .debounceTime(const Duration(milliseconds: 500));
-          },
-          initialData: null,
-        ).data ??
-        '';
-
-    final messageKeyword = useMemoizedStream(
-          () {
-            final keywordCubit = context.read<KeywordCubit>();
-            return Stream.value(keywordCubit.state)
-                .merge(keywordCubit.stream)
+            final keywordCubit = ref.watch(keywordProvider.notifier);
+            return keywordCubit.stream
+                .startWith(keywordCubit.state)
                 .map((event) => event.trim())
                 .distinct()
                 .debounceTime(const Duration(milliseconds: 150));
           },
-          initialData: null,
         ).data ??
         '';
 
     final accountServer = context.accountServer;
 
-    final slideCategoryState =
-        useBlocState<SlideCategoryCubit, SlideCategoryState>();
+    final slideCategoryState = ref.watch(slideCategoryStateProvider);
+
+    final maoUser = ref.watch(searchMaoUserProvider(keyword)).valueOrNull;
 
     final users = useMemoizedStream(() {
           if (keyword.trim().isEmpty || filterUnseen) {
@@ -91,13 +85,19 @@ class SearchList extends HookWidget {
           }
           return accountServer.database.userDao
               .fuzzySearchUser(
-                id: accountServer.userId,
-                username: keyword,
-                identityNumber: keyword,
-                category: slideCategoryState,
-                isIncludeConversation: true,
-              )
-              .watchThrottle(kSlowThrottleDuration);
+            id: accountServer.userId,
+            username: keyword,
+            identityNumber: keyword,
+            category: slideCategoryState,
+            isIncludeConversation: true,
+          )
+              .watchWithStream(
+            eventStreams: [
+              DataBaseEventBus.instance.updateConversationIdStream,
+              DataBaseEventBus.instance.updateUserIdsStream,
+            ],
+            duration: kSlowThrottleDuration,
+          );
         }, keys: [keyword, filterUnseen, slideCategoryState]).data ??
         [];
 
@@ -107,27 +107,32 @@ class SearchList extends HookWidget {
           }
           return accountServer.database.conversationDao
               .fuzzySearchConversation(
-                keyword,
-                32,
-                filterUnseen: filterUnseen,
-                category: slideCategoryState,
-              )
-              .watchThrottle(kSlowThrottleDuration);
+            keyword,
+            32,
+            filterUnseen: filterUnseen,
+            category: slideCategoryState,
+          )
+              .watchWithStream(
+            eventStreams: [
+              DataBaseEventBus.instance.updateConversationIdStream,
+              DataBaseEventBus.instance.updateUserIdsStream,
+            ],
+            duration: kSlowThrottleDuration,
+          );
         }, keys: [keyword, filterUnseen, slideCategoryState]).data ??
         [];
 
-    final messages = useMemoizedStream(
-            () => messageKeyword.isEmpty
-                ? Stream.value(<SearchMessageDetailItem>[])
-                : accountServer.database.messageDao
-                    .fuzzySearchMessageByCategory(
-                      messageKeyword,
-                      limit: 4,
-                      unseenConversationOnly: filterUnseen,
-                      category: slideCategoryState,
-                    )
-                    .watchThrottle(kSlowThrottleDuration),
-            keys: [messageKeyword, filterUnseen, slideCategoryState]).data ??
+    final messages = useMemoizedFuture<List<SearchMessageDetailItem>>(
+            () => keyword.isEmpty
+                ? Future.value(<SearchMessageDetailItem>[])
+                : accountServer.database.fuzzySearchMessageByCategory(
+                    keyword,
+                    limit: 4,
+                    unseenConversationOnly: filterUnseen,
+                    category: slideCategoryState,
+                  ),
+            [],
+            keys: [keyword, filterUnseen, slideCategoryState]).data ??
         [];
 
     final isMixinNumber =
@@ -139,8 +144,10 @@ class SearchList extends HookWidget {
 
     final type = useState<_ShowMoreType?>(null);
 
-    final resultIsEmpty =
-        users.isEmpty && conversations.isEmpty && messages.isEmpty;
+    final resultIsEmpty = maoUser == null &&
+        users.isEmpty &&
+        conversations.isEmpty &&
+        messages.isEmpty;
 
     if (keyword.isEmpty && filterUnseen) {
       return const UnseenConversationList();
@@ -160,9 +167,16 @@ class SearchList extends HookWidget {
     }
     return CustomScrollView(
       slivers: [
+        if (maoUser != null)
+          SliverToBoxAdapter(
+            child: _SearchMaoUserWidget(
+              maoUser: maoUser,
+              keyword: keyword,
+            ),
+          ),
         if (users.isEmpty && isUrl)
           SliverToBoxAdapter(
-            child: SearchItem(
+            child: SearchItemWidget(
               name: context.l10n.openLink(keyword),
               keyword: keyword,
               maxLines: true,
@@ -171,7 +185,7 @@ class SearchList extends HookWidget {
           ),
         if (users.isEmpty && isMixinNumber)
           SliverToBoxAdapter(
-            child: SearchItem(
+            child: SearchItemWidget(
               name: context.l10n.searchPlaceholderNumber + keyword,
               keyword: keyword,
               maxLines: true,
@@ -215,7 +229,7 @@ class SearchList extends HookWidget {
             delegate: SliverChildBuilderDelegate(
               (BuildContext context, int index) {
                 final user = users[index];
-                return SearchItem(
+                return SearchItemWidget(
                   avatar: AvatarWidget(
                     name: user.fullName,
                     userId: user.userId,
@@ -224,13 +238,14 @@ class SearchList extends HookWidget {
                   ),
                   name: user.fullName ?? '?',
                   description: context.l10n.contactMixinId(user.identityNumber),
-                  trailing: VerifiedOrBotWidget(
+                  trailing: BadgesWidget(
                     verified: user.isVerified,
                     isBot: user.appId != null,
+                    membership: user.membership,
                   ),
                   keyword: keyword,
                   onTap: () async {
-                    await ConversationCubit.selectUser(
+                    await ConversationStateNotifier.selectUser(
                       context,
                       user.userId,
                       user: user,
@@ -264,9 +279,9 @@ class SearchList extends HookWidget {
             delegate: SliverChildBuilderDelegate(
               (BuildContext context, int index) {
                 final conversation = conversations[index];
-                return HookBuilder(builder: (context) {
+                return HookConsumer(builder: (context, ref, _) {
                   final description = useMemoizedFuture(() async {
-                    final mentionCache = context.read<MentionCache>();
+                    final mentionCache = ref.read(mentionCacheProvider);
 
                     if (conversation.contentType ==
                         MessageCategory.systemConversation) {
@@ -292,7 +307,7 @@ class SearchList extends HookWidget {
                       }
                       final preview = await generatePinPreviewText(
                         pinMessageMinimal: pinMessageMinimal,
-                        mentionCache: context.read<MentionCache>(),
+                        mentionCache: ref.read(mentionCacheProvider),
                       );
                       return context.l10n.chatPinMessage(
                           conversation.senderFullName ?? '', preview);
@@ -324,7 +339,7 @@ class SearchList extends HookWidget {
 
                   return ConversationMenuWrapper(
                     searchConversation: conversation,
-                    child: SearchItem(
+                    child: SearchItemWidget(
                       avatar: ConversationAvatarWidget(
                         conversationId: conversation.conversationId,
                         fullName: conversation.validName,
@@ -336,13 +351,14 @@ class SearchList extends HookWidget {
                       ),
                       name: conversation.validName,
                       description: description,
-                      trailing: VerifiedOrBotWidget(
+                      trailing: BadgesWidget(
                         verified: conversation.isVerified,
                         isBot: conversation.appId != null,
+                        membership: conversation.membership,
                       ),
                       keyword: keyword,
                       onTap: () async {
-                        await ConversationCubit.selectConversation(
+                        await ConversationStateNotifier.selectConversation(
                           context,
                           conversation.conversationId,
                         );
@@ -396,26 +412,116 @@ class SearchList extends HookWidget {
   }
 }
 
-class SearchItem extends StatelessWidget {
-  const SearchItem(
-      {super.key,
-      this.avatar,
-      required this.name,
-      required this.keyword,
-      this.nameHighlight = true,
-      required this.onTap,
-      this.description,
-      this.descriptionIcon,
-      this.date,
-      this.trailing,
-      this.selected,
-      this.maxLines = false,
-      this.margin = const EdgeInsets.symmetric(horizontal: 6),
-      this.padding = const EdgeInsets.symmetric(
-        horizontal: 6,
-        vertical: 12,
+const _maoIcon =
+    'https://kernel.mixin.dev/objects/fe75a8e48aeffb486df622c91bebfe4056ada7009f3151fb49e2a18340bbd615/icon';
+
+class _SearchMaoUserWidget extends StatelessWidget {
+  const _SearchMaoUserWidget({
+    required this.maoUser,
+    required this.keyword,
+  });
+
+  final MaoUser maoUser;
+  final String keyword;
+
+  @override
+  Widget build(BuildContext context) {
+    final defaultInscriptionImage = SvgPicture.asset(
+      Resources.assetsImagesInscriptionPlaceholderSvg,
+      width: 14,
+      height: 14,
+    );
+    Widget? openButton;
+    if (maoUser.user.isBot) {
+      openButton = ElevatedButton(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: context.theme.accent,
+          foregroundColor: Colors.white,
+          textStyle: const TextStyle(fontSize: 12),
+          minimumSize: Size.zero,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        ),
+        onPressed: () async {
+          final app =
+              await context.accountServer.findOrSyncApp(maoUser.user.appId!);
+          if (app == null) {
+            e('app not found: ${maoUser.user.appId}');
+            showToastFailed(null);
+            return;
+          }
+          await MixinWebView.instance.openBotWebViewWindow(context, app);
+        },
+        child: Text(context.l10n.open),
+      );
+    }
+    return SearchItemWidget(
+      avatar: AvatarWidget(
+        name: maoUser.user.fullName,
+        userId: maoUser.user.userId,
+        size: ConversationPage.conversationItemAvatarSize,
+        avatarUrl: maoUser.user.avatarUrl,
       ),
-      this.nameFontSize = 16});
+      name: maoUser.user.fullName ?? '?',
+      description: maoUser.mao,
+      trailing: BadgesWidget(
+        verified: maoUser.user.isVerified,
+        isBot: maoUser.user.appId != null,
+        membership: maoUser.user.membership,
+      ),
+      contentTrailing: openButton,
+      descriptionIconWidget: ClipOval(
+        child: MixinImage.network(
+          _maoIcon,
+          width: 14,
+          height: 14,
+          errorBuilder: (context, error, stackTrace) {
+            e('load mao icon error: $error, $stackTrace');
+            return defaultInscriptionImage;
+          },
+          placeholder: () => defaultInscriptionImage,
+        ),
+      ),
+      keyword: keyword,
+      onTap: () async {
+        if (maoUser.user.userId == context.accountServer.userId) {
+          _clear(context);
+          await showUserDialog(context, maoUser.user.userId);
+          return;
+        }
+        await ConversationStateNotifier.selectUser(
+          context,
+          maoUser.user.userId,
+          user: maoUser.user,
+        );
+        _clear(context);
+      },
+    );
+  }
+}
+
+class SearchItemWidget extends StatelessWidget {
+  const SearchItemWidget({
+    required this.name,
+    required this.keyword,
+    required this.onTap,
+    super.key,
+    this.avatar,
+    this.nameHighlight = true,
+    this.description,
+    this.descriptionIcon,
+    this.date,
+    this.trailing,
+    this.selected,
+    this.maxLines = false,
+    this.margin = const EdgeInsets.symmetric(horizontal: 6),
+    this.padding = const EdgeInsets.symmetric(
+      horizontal: 6,
+      vertical: 12,
+    ),
+    this.nameFontSize = 16,
+    this.descriptionIconWidget,
+    this.contentTrailing,
+  });
 
   final Widget? avatar;
   final Widget? trailing;
@@ -425,12 +531,14 @@ class SearchItem extends StatelessWidget {
   final VoidCallback onTap;
   final String? description;
   final String? descriptionIcon;
+  final Widget? descriptionIconWidget;
   final DateTime? date;
   final bool? selected;
   final bool maxLines;
   final EdgeInsetsGeometry margin;
   final EdgeInsetsGeometry padding;
   final double nameFontSize;
+  final Widget? contentTrailing;
 
   @override
   Widget build(BuildContext context) {
@@ -468,7 +576,7 @@ class SearchItem extends StatelessWidget {
                           child: Row(
                             children: [
                               Flexible(
-                                child: HighlightText(
+                                child: CustomText(
                                   name,
                                   maxLines: maxLines ? null : 1,
                                   overflow:
@@ -477,14 +585,15 @@ class SearchItem extends StatelessWidget {
                                     color: context.theme.text,
                                     fontSize: nameFontSize,
                                   ),
-                                  highlightTextSpans: [
-                                    if (nameHighlight)
-                                      HighlightTextSpan(
-                                        keyword,
-                                        style: TextStyle(
-                                          color: context.theme.accent,
-                                        ),
+                                  textMatchers: [
+                                    EmojiTextMatcher(),
+                                    KeyWordTextMatcher(
+                                      keyword,
+                                      style: TextStyle(
+                                        color: context.theme.accent,
                                       ),
+                                      caseSensitive: false,
+                                    ),
                                   ],
                                 ),
                               ),
@@ -493,10 +602,9 @@ class SearchItem extends StatelessWidget {
                           ),
                         ),
                         if (date != null)
-                          BlocConverter<MinuteTimerCubit, DateTime, String>(
-                            converter: (_) => date!.format,
-                            builder: (context, text) => Text(
-                              text,
+                          Consumer(
+                            builder: (context, ref, _) => Text(
+                              ref.watch(formattedDateTimeProvider(date!)),
                               style: TextStyle(
                                 color: context.theme.secondaryText,
                                 fontSize: 12,
@@ -508,6 +616,11 @@ class SearchItem extends StatelessWidget {
                     if (description != null)
                       Row(
                         children: [
+                          if (descriptionIconWidget != null)
+                            Padding(
+                              padding: const EdgeInsets.only(right: 2),
+                              child: descriptionIconWidget,
+                            ),
                           if (descriptionIcon != null)
                             Padding(
                               padding: const EdgeInsets.only(right: 2),
@@ -520,7 +633,7 @@ class SearchItem extends StatelessWidget {
                               ),
                             ),
                           Expanded(
-                            child: HighlightText(
+                            child: CustomText(
                               description!,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
@@ -528,8 +641,9 @@ class SearchItem extends StatelessWidget {
                                 color: context.theme.secondaryText,
                                 fontSize: 14,
                               ),
-                              highlightTextSpans: [
-                                HighlightTextSpan(
+                              textMatchers: [
+                                EmojiTextMatcher(),
+                                KeyWordTextMatcher(
                                   keyword,
                                   style: TextStyle(
                                     color: context.theme.accent,
@@ -543,6 +657,11 @@ class SearchItem extends StatelessWidget {
                   ],
                 ),
               ),
+              if (contentTrailing != null)
+                Padding(
+                  padding: const EdgeInsets.only(left: 8),
+                  child: contentTrailing,
+                ),
             ],
           ),
         ),
@@ -551,7 +670,7 @@ class SearchItem extends StatelessWidget {
   }
 }
 
-class _SearchMessageList extends HookWidget {
+class _SearchMessageList extends HookConsumerWidget {
   const _SearchMessageList({
     required this.keyword,
     required this.onTap,
@@ -565,64 +684,39 @@ class _SearchMessageList extends HookWidget {
   final SlideCategoryState categoryState;
 
   @override
-  Widget build(BuildContext context) {
-    final searchMessageBloc =
-        useBloc<AnonymousPagingBloc<SearchMessageDetailItem>>(
-      () => AnonymousPagingBloc<SearchMessageDetailItem>(
-        initState: const PagingState<SearchMessageDetailItem>(),
+  Widget build(BuildContext context, WidgetRef ref) {
+    final searchMessageCubit = useBloc(
+      () => SearchMessageCubit.slideCategory(
+        database: context.database,
+        category: categoryState,
+        keyword: keyword,
         limit: context.read<ConversationListBloc>().limit,
-        queryCount: () =>
-            context.database.messageDao.fuzzySearchMessageCountByCategory(
-          keyword,
-          unseenConversationOnly: filterUnseen,
-          category: categoryState,
-        ),
-        queryRange: (int limit, int offset) async {
-          if (keyword.isEmpty) return [];
-          return context.database.messageDao
-              .fuzzySearchMessageByCategory(
-                keyword,
-                limit: limit,
-                offset: offset,
-                unseenConversationOnly: filterUnseen,
-                category: categoryState,
-              )
-              .get();
-        },
       ),
-      keys: [keyword, filterUnseen, categoryState],
+      keys: [keyword, categoryState],
     );
-    useEffect(
-      () => context.database.messageDao.searchMessageUpdateEvent
-          .listen((event) => searchMessageBloc.add(PagingUpdateEvent()))
-          .cancel,
-      [keyword],
-    );
-    final pageState = useBlocState<PagingBloc<SearchMessageDetailItem>,
-        PagingState<SearchMessageDetailItem>>(bloc: searchMessageBloc);
 
-    final child = !pageState.initialized
+    final pageState = useBlocState<SearchMessageCubit, SearchMessageState>(
+        bloc: searchMessageCubit);
+
+    final child = pageState.initializing
         ? Center(
             child: CircularProgressIndicator(
               strokeWidth: 2,
               valueColor: AlwaysStoppedAnimation(context.theme.accent),
             ),
           )
-        : pageState.count <= 0
+        : pageState.items.isEmpty
             ? const SearchEmptyWidget()
             : ScrollablePositionedList.builder(
-                itemPositionsListener: searchMessageBloc.itemPositionsListener,
-                itemCount: pageState.count,
+                itemPositionsListener: searchMessageCubit.itemPositionsListener,
+                itemCount: pageState.items.length,
                 itemBuilder: (context, index) {
-                  final message = pageState.map[index];
-                  if (message == null) {
-                    return const SizedBox(
-                        height: ConversationPage.conversationItemHeight);
-                  }
+                  final message = pageState.items[index];
                   return SearchMessageItem(
-                      message: message,
-                      keyword: keyword,
-                      onTap: _searchMessageItemOnTap(context, message));
+                    message: message,
+                    keyword: keyword,
+                    onTap: _searchMessageItemOnTap(context, message),
+                  );
                 });
 
     return Column(
@@ -695,22 +789,22 @@ enum _ShowMoreType {
 Future Function() _searchMessageItemOnTap(
         BuildContext context, SearchMessageDetailItem message) =>
     () async {
-      await ConversationCubit.selectConversation(
+      await ConversationStateNotifier.selectConversation(
         context,
         message.conversationId,
         initIndexMessageId: message.messageId,
-        keyword: context.read<KeywordCubit>().state,
+        keyword: context.providerContainer.read(trimmedKeywordProvider),
       );
 
       _clear(context);
     };
 
-class SearchMessageItem extends HookWidget {
+class SearchMessageItem extends HookConsumerWidget {
   const SearchMessageItem({
-    super.key,
     required this.message,
     required this.keyword,
     required this.onTap,
+    super.key,
     this.showSender = false,
   });
 
@@ -720,7 +814,7 @@ class SearchMessageItem extends HookWidget {
   final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final isGroup = useMemoized(
         () =>
             message.category == ConversationCategory.group ||
@@ -738,7 +832,7 @@ class SearchMessageItem extends HookWidget {
         ]);
 
     final description = useMemoizedFuture(() async {
-      final mentionCache = context.read<MentionCache>();
+      final mentionCache = ref.read(mentionCacheProvider);
 
       return messagePreviewOptimize(
           message.status,
@@ -778,7 +872,7 @@ class SearchMessageItem extends HookWidget {
             size: ConversationPage.conversationItemAvatarSize,
             userId: message.ownerId,
           );
-    return SearchItem(
+    return SearchItemWidget(
       avatar: avatar,
       name: showSender
           ? message.senderFullName ?? ''
@@ -786,10 +880,13 @@ class SearchMessageItem extends HookWidget {
               message.groupName,
               message.ownerFullName,
             ),
-      trailing: VerifiedOrBotWidget(
-        verified: message.verified,
-        isBot: message.appId != null,
-      ),
+      trailing: showSender || message.category == ConversationCategory.contact
+          ? BadgesWidget(
+              verified: message.verified,
+              isBot: message.appId != null,
+              membership: message.membership,
+            )
+          : null,
       nameHighlight: false,
       keyword: keyword,
       descriptionIcon: icon,
@@ -800,11 +897,11 @@ class SearchMessageItem extends HookWidget {
   }
 }
 
-class SearchEmptyWidget extends StatelessWidget {
+class SearchEmptyWidget extends HookConsumerWidget {
   const SearchEmptyWidget({super.key});
 
   @override
-  Widget build(BuildContext context) => Container(
+  Widget build(BuildContext context, WidgetRef ref) => Container(
         padding: const EdgeInsets.symmetric(
           horizontal: 43,
           vertical: 86,
@@ -831,7 +928,9 @@ class SearchEmptyWidget extends StatelessWidget {
               ),
               onPressed: () {
                 _clear(context);
-                context.read<ConversationFilterUnseenCubit>().reset();
+                ref
+                    .read(conversationUnseenFilterEnabledProvider.notifier)
+                    .reset();
               },
             ),
           ],

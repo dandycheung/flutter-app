@@ -1,31 +1,33 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lottie/lottie.dart';
 
 import '../../app.dart';
 import '../../utils/app_lifecycle.dart';
+import '../../utils/extension/extension.dart';
 import '../../utils/hook.dart';
-import '../cache_image.dart';
 import '../cache_lottie.dart';
+import '../mixin_image.dart';
 
-class StickerItem extends HookWidget {
+class StickerItem extends HookConsumerWidget {
   const StickerItem({
-    super.key,
     required this.assetUrl,
     required this.assetType,
-    this.placeholder,
+    super.key,
+    this.errorWidget,
     this.width,
     this.height,
   });
 
   final String assetUrl;
   final String? assetType;
-  final Widget? placeholder;
+  final Widget? errorWidget;
   final double? width;
   final double? height;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final isJson = useMemoized(() => assetType == 'json', [assetType]);
 
     final playing = useState(true);
@@ -66,7 +68,10 @@ class StickerItem extends HookWidget {
 
     final child = isJson
         ? LottieBuilder(
-            lottie: CachedNetworkLottie(assetUrl),
+            lottie: CachedNetworkLottie(
+              assetUrl,
+              proxyConfig: context.database.settingProperties.activatedProxy,
+            ),
             controller: controller,
             height: height,
             width: width,
@@ -75,13 +80,17 @@ class StickerItem extends HookWidget {
               controller.duration = composition.duration;
               listener();
             },
+            errorBuilder:
+                errorWidget != null ? (_, __, ___) => errorWidget! : null,
           )
-        : CacheImage(assetUrl,
+        : MixinImage.network(
+            assetUrl,
             height: height,
             width: width,
-            controller: playing,
             fit: BoxFit.contain,
-            placeholder: () => placeholder ?? const SizedBox());
+            errorBuilder:
+                errorWidget != null ? (_, __, ___) => errorWidget! : null,
+          );
 
     if (width == null || height == null) {
       return AspectRatio(aspectRatio: 1, child: child);
@@ -93,9 +102,9 @@ class StickerItem extends HookWidget {
 
 class StickerGroupIcon extends StatelessWidget {
   const StickerGroupIcon({
-    super.key,
     required this.iconUrl,
     required this.size,
+    super.key,
   });
 
   final String iconUrl;
